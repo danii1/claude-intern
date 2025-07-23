@@ -1,0 +1,70 @@
+{
+  "name": "claude-intern",
+  "version": "1.0.0",
+  "description": "AI-powered task automation tool for JIRA and Linear. Automatically implement tasks using Claude Code with git integration and PR creation.",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "dev": "bun run src/index.ts",
+    "build": "bun build src/index.ts --outdir dist --target node --minify",
+    "typecheck": "bun run tsc --noEmit",
+    "clean": "rm -rf dist",
+    "test": "bun test",
+    "install-global": "bun run build && bun add -g file://$PWD",
+    "uninstall-global": "bun uninstall -g claude-intern",
+    "prepare": "bun run build",
+    "prepublishOnly": "bun run clean && bun run build && bun run typecheck"
+  },
+  "keywords": [
+    "jira",
+    "linear",
+    "task",
+    "automation",
+    "claude",
+    "ai",
+    "intern",
+    "bitbucket",
+    "github",
+    "cli",
+    "workflow",
+    "productivity",
+    "code-generation",
+    "project-management"
+  ],
+  "author": {
+    "name": "Daniil Pokrovsky",
+    "url": "https://github.com/danii1"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/danii1/claude-intern#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/danii1/claude-intern.git"
+  },
+  "bugs": {
+    "url": "https://github.com/danii1/claude-intern/issues"
+  },
+  "dependencies": {
+    "@types/turndown": "^5.0.5",
+    "commander": "^11.0.0",
+    "dotenv": "^16.3.1",
+    "turndown": "^7.2.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.1.2",
+    "@types/node": "^20.10.0",
+    "bun-types": "latest",
+    "husky": "^9.1.7",
+    "typescript": "^5.3.0",
+    "ultracite": "5.0.49"
+  },
+  "bin": {
+    "claude-intern": "./dist/index.js"
+  },
+  "files": [
+    "dist/**/*",
+    "README.md",
+    ".env.sample"
+  ]
+}

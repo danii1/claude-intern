@@ -1,0 +1,218 @@
+# Claude Intern
+
+Your AI intern for automatically implementing JIRA tasks using Claude. Supports both single task processing and batch processing of multiple tasks through JQL queries or explicit task lists. Pulls task details and feeds them to Claude for implementation with full automation of the development workflow.
+
+## Setup
+
+1. Install Bun (if not already installed):
+
+```bash
+curl -fsSL https://bun.sh/install | bash
+```
+
+2. Install dependencies:
+
+```bash
+bun install
+```
+
+3. Copy `.env.sample` to `.env` and configure your JIRA credentials:
+
+```bash
+cp .env.sample .env
+```
+
+4. Update `.env` with your JIRA details:
+
+   - `JIRA_BASE_URL`: Your JIRA instance URL (e.g., https://yourcompany.atlassian.net)
+   - `JIRA_EMAIL`: Your JIRA email address
+   - `JIRA_API_TOKEN`: Your JIRA API token (create one at https://id.atlassian.com/manage-profile/security/api-tokens)
+
+   Optional PR integration:
+   - `GITHUB_TOKEN`: GitHub personal access token for creating pull requests
+   - `BITBUCKET_TOKEN`: Bitbucket app password for creating pull requests
+   - `JIRA_PR_STATUS`: Auto-transition JIRA status after PR creation (e.g., "In Review")
+
+   The `.env.sample` file includes helpful comments and optional configuration options.
+
+5. (Optional) Install globally to use from any directory:
+
+```bash
+bun run install-global
+```
+
+## Usage
+
+### Single Task Processing
+
+```bash
+# Run with a JIRA task key (automatically runs Claude)
+bun start TASK-123
+
+# Development mode (same as start with Bun)
+bun run dev TASK-123
+
+# Skip Claude and just fetch/format the task
+bun start TASK-123 -- --no-claude
+
+# Skip git branch creation
+bun start TASK-123 -- --no-git
+
+# Use custom .env file
+bun start TASK-123 -- --env-file /path/to/custom.env
+
+# Specify custom output file
+bun start TASK-123 -- -o my-task.md
+
+# Verbose output for debugging
+bun start TASK-123 -- -v
+
+# Custom Claude CLI path
+bun start TASK-123 -- --claude-path /path/to/claude
+
+# Increase max turns for complex tasks
+bun start TASK-123 -- --max-turns 50
+
+# Skip automatic commit after Claude completes
+bun start TASK-123 -- --no-auto-commit
+
+# Create pull request after implementation
+bun start TASK-123 -- --create-pr
+
+# Create pull request targeting specific branch
+bun start TASK-123 -- --create-pr --pr-target-branch develop
+```
+
+### Batch Processing (Multiple Tasks)
+
+```bash
+# Process multiple specific tasks
+bun start PROJ-123 PROJ-124 PROJ-125
+
+# Process tasks matching JQL query
+bun start -- --jql "project = PROJ AND status = 'To Do'"
+
+# Complex JQL with custom fields and conditions
+bun start -- --jql "project = \"My Project\" AND cf[10016] <= 3 AND labels IN (FrontEnd, MobileApp)"
+
+# Batch process with PR creation
+bun start -- --jql "assignee = currentUser() AND status = 'To Do'" --create-pr
+
+# High-complexity batch processing with extended turns
+bun start -- --jql "labels = 'refactoring' AND type = Story" --max-turns 500 --create-pr
+
+# Batch process with skipped clarity checks for faster processing
+bun start PROJ-101 PROJ-102 PROJ-103 -- --skip-clarity-check --create-pr
+```
+
+### Examples
+
+```bash
+# Fetch JIRA task and run Claude automatically
+bun start PROJ-456
+
+# Just fetch and format (useful for reviewing before Claude runs)
+bun start PROJ-456 -- --no-claude
+
+# Then manually run Claude with the formatted output
+claude -p --dangerously-skip-permissions --max-turns 10 < task-details.md
+
+# Development mode (same as start with Bun)
+bun run dev PROJ-456
+```
+
+### Global Usage (from any directory)
+
+After installing globally, you can run the tool from any directory (especially useful when working in your project's git repository):
+
+```bash
+# Single task processing
+claude-intern PROJ-123
+
+# Multiple task processing
+claude-intern PROJ-123 PROJ-124 PROJ-125
+
+# JQL query processing
+claude-intern --jql "project = PROJ AND status = 'To Do'"
+claude-intern --jql "assignee = currentUser() AND labels = 'frontend' AND type = Bug"
+
+# All the same options work with batch processing
+claude-intern PROJ-123 PROJ-124 --no-claude --verbose
+claude-intern --jql "status = 'To Do'" --create-pr --pr-target-branch develop
+claude-intern --jql "priority = High" --max-turns 300 --skip-clarity-check
+
+# Advanced batch scenarios
+claude-intern --jql "\"Epic Link\" = PROJ-100" --create-pr
+claude-intern --jql "sprint in openSprints() AND assignee = currentUser()" --max-turns 500
+
+# Uninstall when no longer needed
+bun run uninstall-global  # (run from claude-intern directory)
+```
+
+## What it does
+
+1. Fetches the JIRA task details including:
+
+   - Task description
+   - Custom fields (including links to Figma, external docs, etc.)
+   - Comments and discussion
+
+2. Formats the information for Claude
+
+3. Creates a feature branch named `feature/task-id` (e.g., `feature/proj-123`)
+
+4. Runs `claude -p` with enhanced permissions and extended conversation limits for automatic implementation
+
+5. Automatically commits all changes with a descriptive commit message after Claude completes successfully
+
+6. Pushes the feature branch to remote repository (when creating PRs)
+
+7. Optionally creates pull requests on GitHub or Bitbucket with detailed implementation summaries
+
+## Requirements
+
+- Bun runtime
+- JIRA API access
+- Claude CLI installed and configured
+- Git (for automatic branch creation)
+
+## Quick Start
+
+1. Install globally: `bun run install-global`
+2. Copy `.env.sample` to your project directory as `.env`
+3. Configure your JIRA credentials in `.env`
+4. Run from your project directory: `claude-intern PROJ-123`
+
+See [USAGE.md](./USAGE.md) for detailed usage scenarios and troubleshooting.  
+See [GLOBAL_USAGE.md](./GLOBAL_USAGE.md) for quick reference on global installation.  
+See [ENV_SETUP.md](./ENV_SETUP.md) for comprehensive environment configuration guide.
+
+## Features
+
+### Core Functionality
+- ✅ **Full TypeScript Support** - Type-safe development with comprehensive interfaces
+- ✅ **JIRA API Integration** - Connects to any JIRA instance with proper authentication
+- ✅ **Smart Link Detection** - Automatically finds Figma, GitHub, Confluence links in custom fields
+- ✅ **Rich Text Processing** - Handles JIRA's Atlassian Document Format with proper conversion
+- ✅ **HTML to Markdown Conversion** - Converts JIRA's rendered HTML descriptions to clean markdown format
+- ✅ **Working Attachment Links** - Converts relative JIRA attachment URLs to clickable full URLs
+- ✅ **Comment Threading** - Includes all task discussions and updates
+
+### Batch Processing
+- ✅ **Multiple Task Support** - Process multiple tasks with explicit task keys
+- ✅ **JQL Query Integration** - Use JIRA Query Language for dynamic task selection
+- ✅ **Complex JQL Support** - Custom fields, arrays, operators, and advanced conditions
+- ✅ **Error Isolation** - Failed tasks don't stop processing of remaining work
+- ✅ **Progress Tracking** - Real-time progress indicators for batch operations
+- ✅ **Dynamic File Naming** - Unique output files prevent conflicts during batch processing
+
+### Automation & Integration
+- ✅ **Claude Integration** - Automatically runs `claude -p` with formatted context
+- ✅ **Real-time Output** - All Claude output is visible in real-time during execution
+- ✅ **CLI Interface** - Easy-to-use command line tool with comprehensive options
+- ✅ **Git Integration** - Automatically creates feature branches for each task
+- ✅ **Auto-Commit** - Commits changes automatically after Claude completes successfully
+- ✅ **Pull Request Creation** - Automatically creates PRs on GitHub or Bitbucket with implementation details
+- ✅ **Smart Repository Detection** - Automatically detects GitHub/Bitbucket and workspace from git remote
+- ✅ **Error Handling** - Robust error handling and validation
+- ✅ **Configurable** - Flexible options for output and Claude path

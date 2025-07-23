@@ -1,0 +1,41 @@
+# Source files (we ship built dist/)
+src/
+*.ts
+!*.d.ts
+
+# Development files
+.env*
+!.env.sample
+.vscode/
+.idea/
+
+# Build artifacts that shouldn't be published
+node_modules/
+coverage/
+*.log
+*.tgz
+
+# Development configuration
+.biomejs.json
+.husky/
+.gitignore
+
+# Test files
+test/
+tests/
+__tests__/
+*.test.*
+*.spec.*
+
+# Documentation development
+docs/
+*.md
+!README.md
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Runtime directories
+tmp/
+temp/
