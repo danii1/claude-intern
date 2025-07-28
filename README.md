@@ -2,7 +2,23 @@
 
 Your AI intern for automatically implementing JIRA tasks using Claude. Supports both single task processing and batch processing of multiple tasks through JQL queries or explicit task lists. Pulls task details and feeds them to Claude for implementation with full automation of the development workflow.
 
-## Setup
+## Installation
+
+### Global Installation (Recommended)
+
+Install globally via npm to use from any directory:
+
+```bash
+# Install globally
+npm install -g claude-intern
+
+# Or use directly without installing
+npx claude-intern PROJ-123
+```
+
+### Local Development Setup
+
+For development or contributing to the project:
 
 1. Install Bun (if not already installed):
 
@@ -10,19 +26,49 @@ Your AI intern for automatically implementing JIRA tasks using Claude. Supports 
 curl -fsSL https://bun.sh/install | bash
 ```
 
-2. Install dependencies:
+2. Clone and install dependencies:
 
 ```bash
+git clone https://github.com/danii1/claude-intern.git
+cd claude-intern
 bun install
 ```
 
-3. Copy `.env.sample` to `.env` and configure your JIRA credentials:
+3. (Optional) Install development version globally:
 
 ```bash
-cp .env.sample .env
+bun run install-global
 ```
 
-4. Update `.env` with your JIRA details:
+## Configuration
+
+### Environment File Setup
+
+The tool searches for `.env` files in the following order:
+
+1. **Custom path** (if specified with `--env-file`)
+2. **Current working directory** (where you run the command)
+3. **User home directory** (`~/.env`)
+4. **Tool installation directory**
+
+For global installation, it's recommended to either:
+- Place `.env` in your project directory (most common)
+- Place `.env` in your home directory (`~/.env`) for global access
+
+```bash
+# Option 1: Project-specific (recommended)
+cp .env.sample .env
+
+# Option 2: Global configuration
+cp .env.sample ~/.env
+
+# Option 3: Custom location
+claude-intern PROJ-123 --env-file /path/to/custom.env
+```
+
+### Required Configuration
+
+Update your `.env` file with your JIRA details:
 
    - `JIRA_BASE_URL`: Your JIRA instance URL (e.g., https://yourcompany.atlassian.net)
    - `JIRA_EMAIL`: Your JIRA email address
@@ -35,118 +81,109 @@ cp .env.sample .env
 
    The `.env.sample` file includes helpful comments and optional configuration options.
 
-5. (Optional) Install globally to use from any directory:
-
-```bash
-bun run install-global
-```
-
 ## Usage
 
 ### Single Task Processing
 
 ```bash
-# Run with a JIRA task key (automatically runs Claude)
-bun start TASK-123
+# Global installation usage (recommended)
+claude-intern TASK-123
 
-# Development mode (same as start with Bun)
-bun run dev TASK-123
+# Or use with npx (no installation needed)
+npx claude-intern TASK-123
 
 # Skip Claude and just fetch/format the task
-bun start TASK-123 -- --no-claude
+claude-intern TASK-123 --no-claude
 
 # Skip git branch creation
-bun start TASK-123 -- --no-git
+claude-intern TASK-123 --no-git
 
 # Use custom .env file
-bun start TASK-123 -- --env-file /path/to/custom.env
+claude-intern TASK-123 --env-file /path/to/custom.env
 
 # Specify custom output file
-bun start TASK-123 -- -o my-task.md
+claude-intern TASK-123 -o my-task.md
 
 # Verbose output for debugging
-bun start TASK-123 -- -v
+claude-intern TASK-123 -v
 
 # Custom Claude CLI path
-bun start TASK-123 -- --claude-path /path/to/claude
+claude-intern TASK-123 --claude-path /path/to/claude
 
 # Increase max turns for complex tasks
-bun start TASK-123 -- --max-turns 50
+claude-intern TASK-123 --max-turns 50
 
 # Skip automatic commit after Claude completes
-bun start TASK-123 -- --no-auto-commit
+claude-intern TASK-123 --no-auto-commit
 
 # Create pull request after implementation
-bun start TASK-123 -- --create-pr
+claude-intern TASK-123 --create-pr
 
 # Create pull request targeting specific branch
-bun start TASK-123 -- --create-pr --pr-target-branch develop
+claude-intern TASK-123 --create-pr --pr-target-branch develop
+```
+
+#### Local Development Usage
+
+```bash
+# Run with Bun during development
+bun start TASK-123
+
+# Development mode (same as start)
+bun run dev TASK-123
+
+# All options work with bun as well (note the -- separator)
+bun start TASK-123 -- --no-claude --verbose
 ```
 
 ### Batch Processing (Multiple Tasks)
 
 ```bash
 # Process multiple specific tasks
-bun start PROJ-123 PROJ-124 PROJ-125
+claude-intern PROJ-123 PROJ-124 PROJ-125
 
 # Process tasks matching JQL query
-bun start -- --jql "project = PROJ AND status = 'To Do'"
+claude-intern --jql "project = PROJ AND status = 'To Do'"
 
 # Complex JQL with custom fields and conditions
-bun start -- --jql "project = \"My Project\" AND cf[10016] <= 3 AND labels IN (FrontEnd, MobileApp)"
+claude-intern --jql "project = \"My Project\" AND cf[10016] <= 3 AND labels IN (FrontEnd, MobileApp)"
 
 # Batch process with PR creation
-bun start -- --jql "assignee = currentUser() AND status = 'To Do'" --create-pr
+claude-intern --jql "assignee = currentUser() AND status = 'To Do'" --create-pr
 
 # High-complexity batch processing with extended turns
-bun start -- --jql "labels = 'refactoring' AND type = Story" --max-turns 500 --create-pr
+claude-intern --jql "labels = 'refactoring' AND type = Story" --max-turns 500 --create-pr
 
 # Batch process with skipped clarity checks for faster processing
-bun start PROJ-101 PROJ-102 PROJ-103 -- --skip-clarity-check --create-pr
+claude-intern PROJ-101 PROJ-102 PROJ-103 --skip-clarity-check --create-pr
 ```
 
-### Examples
+#### Local Development Batch Processing
+
+```bash
+# Process multiple tasks with Bun
+bun start PROJ-123 PROJ-124 PROJ-125
+
+# JQL queries (note -- separator for options)
+bun start -- --jql "project = PROJ AND status = 'To Do'"
+bun start -- --jql "assignee = currentUser()" --create-pr
+```
+
+### Quick Examples
 
 ```bash
 # Fetch JIRA task and run Claude automatically
-bun start PROJ-456
+claude-intern PROJ-456
 
 # Just fetch and format (useful for reviewing before Claude runs)
-bun start PROJ-456 -- --no-claude
+claude-intern PROJ-456 --no-claude
 
 # Then manually run Claude with the formatted output
 claude -p --dangerously-skip-permissions --max-turns 10 < task-details.md
 
-# Development mode (same as start with Bun)
-bun run dev PROJ-456
-```
-
-### Global Usage (from any directory)
-
-After installing globally, you can run the tool from any directory (especially useful when working in your project's git repository):
-
-```bash
-# Single task processing
-claude-intern PROJ-123
-
-# Multiple task processing
-claude-intern PROJ-123 PROJ-124 PROJ-125
-
-# JQL query processing
-claude-intern --jql "project = PROJ AND status = 'To Do'"
-claude-intern --jql "assignee = currentUser() AND labels = 'frontend' AND type = Bug"
-
-# All the same options work with batch processing
-claude-intern PROJ-123 PROJ-124 --no-claude --verbose
-claude-intern --jql "status = 'To Do'" --create-pr --pr-target-branch develop
-claude-intern --jql "priority = High" --max-turns 300 --skip-clarity-check
-
 # Advanced batch scenarios
 claude-intern --jql "\"Epic Link\" = PROJ-100" --create-pr
 claude-intern --jql "sprint in openSprints() AND assignee = currentUser()" --max-turns 500
-
-# Uninstall when no longer needed
-bun run uninstall-global  # (run from claude-intern directory)
 ```
 
 ## What it does
@@ -178,10 +215,14 @@ bun run uninstall-global  # (run from claude-intern directory)
 
 ## Quick Start
 
-1. Install globally: `bun run install-global`
-2. Copy `.env.sample` to your project directory as `.env`
-3. Configure your JIRA credentials in `.env`
-4. Run from your project directory: `claude-intern PROJ-123`
+1. Install globally: `npm install -g claude-intern`
+2. Get the sample environment file:
+   ```bash
+   # Download .env.sample from the repository
+   curl -o .env https://raw.githubusercontent.com/danii1/claude-intern/master/.env.sample
+   ```
+3. Configure your JIRA credentials in `.env` (or `~/.env` for global access)
+4. Run from any directory: `claude-intern PROJ-123`
 
 See [USAGE.md](./USAGE.md) for detailed usage scenarios and troubleshooting.  
 See [GLOBAL_USAGE.md](./GLOBAL_USAGE.md) for quick reference on global installation.  

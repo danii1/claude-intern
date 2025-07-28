@@ -24,12 +24,14 @@ This is "Claude Intern" - an AI intern tool for automatically implementing JIRA 
 - `npx claude-intern [TASK-KEYS...]` - Run directly without installing
 - `npm uninstall -g claude-intern` - Remove global installation
 
-#### Local Development
+#### Local Development Setup
+- `git clone https://github.com/danii1/claude-intern.git` - Clone repository
+- `cd claude-intern` - Enter project directory
 - `bun install` - Install dependencies
 - `bun run build` - Build the project
 - `bun start [TASK-KEYS...]` - Run directly with Bun
-- `bun run install-global` - Build and install globally for testing
-- `bun run uninstall-global` - Remove global installation
+- `bun run install-global` - Build and install development version globally
+- `bun run uninstall-global` - Remove development global installation
 - `npm link` - Alternative: Create local symlink for testing npm distribution
 
 ## Architecture Overview
