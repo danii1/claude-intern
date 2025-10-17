@@ -1,5 +1,13 @@
 # Claude Intern Changelog
 
+## [1.0.1] - 2025-08-18
+
+### Fixed
+- **Git Branching**: Fixed issue where feature branches were always created from main/master instead of respecting the `--pr-target-branch` parameter
+  - Feature branches now correctly branch from the specified target branch (e.g., `develop`)
+  - Ensures proper git history when creating PRs to non-main branches
+  - Updated `createFeatureBranch` function to accept and use the base branch parameter
+
 ## [1.0.0] - Initial Release
 
 ### Added

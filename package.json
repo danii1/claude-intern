@@ -1,6 +1,6 @@
 {
   "name": "claude-intern",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "AI-powered task automation tool for JIRA and Linear. Automatically implement tasks using Claude Code with git integration and PR creation.",
   "type": "module",
   "main": "dist/index.js",
@@ -11,8 +11,8 @@
     "typecheck": "bun run tsc --noEmit",
     "clean": "rm -rf dist",
     "test": "bun test",
-    "install-global": "bun run build && bun add -g file://$PWD",
-    "uninstall-global": "bun uninstall -g claude-intern",
+    "install-global": "bun run build && bun link",
+    "uninstall-global": "bun unlink",
     "prepare": "bun run build",
     "prepublishOnly": "bun run clean && bun run build && bun run typecheck"
   },

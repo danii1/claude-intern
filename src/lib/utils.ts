@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync } from 'fs';
-import { spawn } from 'child_process';
+import { spawn } from "child_process";
+import { existsSync, mkdirSync } from "fs";
 
 export class Utils {
   /**
@@ -27,7 +27,7 @@ export class Utils {
    * Sanitize a filename by removing invalid characters
    */
   static sanitizeFilename(filename: string): string {
-    return filename.replace(/[<>:"/\\|?*]/g, '_').replace(/\s+/g, '_');
+    return filename.replace(/[<>:"/\\|?*]/g, "_").replace(/\s+/g, "_");
   }
 
   /**
@@ -45,11 +45,11 @@ export class Utils {
   /**
    * Truncate text to a specified length
    */
-  static truncateText(text: string, maxLength: number = 100): string {
+  static truncateText(text: string, maxLength = 100): string {
     if (!text || text.length <= maxLength) {
       return text;
     }
-    return text.substring(0, maxLength - 3) + '...';
+    return text.substring(0, maxLength - 3) + "...";
   }
 
   /**
@@ -67,23 +67,23 @@ export class Utils {
   /**
    * Convert bytes to human readable format
    */
-  static formatBytes(bytes: number, decimals: number = 2): string {
-    if (bytes === 0) return '0 Bytes';
+  static formatBytes(bytes: number, decimals = 2): string {
+    if (bytes === 0) return "0 Bytes";
 
     const k = 1024;
     const dm = decimals < 0 ? 0 : decimals;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
+    const sizes = ["Bytes", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
 
     const i = Math.floor(Math.log(bytes) / Math.log(k));
 
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+    return Number.parseFloat((bytes / k ** i).toFixed(dm)) + " " + sizes[i];
   }
 
   /**
    * Sleep for a specified number of milliseconds
    */
   static sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   /**
@@ -91,8 +91,8 @@ export class Utils {
    */
   static async retry<T>(
     fn: () => Promise<T>,
-    maxRetries: number = 3,
-    baseDelay: number = 1000
+    maxRetries = 3,
+    baseDelay = 1000
   ): Promise<T> {
     let lastError: Error;
 
@@ -106,9 +106,9 @@ export class Utils {
           throw lastError;
         }
 
-        const delay = baseDelay * Math.pow(2, attempt - 1);
+        const delay = baseDelay * 2 ** (attempt - 1);
         console.warn(`Attempt ${attempt} failed, retrying in ${delay}ms...`);
-        await this.sleep(delay);
+        await Utils.sleep(delay);
       }
     }
 
@@ -118,7 +118,11 @@ export class Utils {
   /**
    * Parse JIRA task key to extract project and number
    */
-  static parseTaskKey(taskKey: string): { project: string; number: number; key: string } {
+  static parseTaskKey(taskKey: string): {
+    project: string;
+    number: number;
+    key: string;
+  } {
     const match = taskKey.match(/^([A-Z]+)-(\d+)$/);
     if (!match) {
       throw new Error(`Invalid JIRA task key format: ${taskKey}`);
@@ -126,43 +130,45 @@ export class Utils {
 
     return {
       project: match[1],
-      number: parseInt(match[2], 10),
-      key: taskKey
+      number: Number.parseInt(match[2], 10),
+      key: taskKey,
     };
   }
 
   /**
    * Generate a unique filename based on task key and timestamp
    */
-  static generateTaskFilename(taskKey: string, extension: string = 'md'): string {
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const sanitizedKey = this.sanitizeFilename(taskKey);
+  static generateTaskFilename(taskKey: string, extension = "md"): string {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const sanitizedKey = Utils.sanitizeFilename(taskKey);
     return `task-${sanitizedKey}-${timestamp}.${extension}`;
   }
 
   /**
    * Execute a git command and return the result
    */
-  static async executeGitCommand(args: string[]): Promise<{ success: boolean; output: string; error?: string }> {
+  static async executeGitCommand(
+    args: string[]
+  ): Promise<{ success: boolean; output: string; error?: string }> {
     return new Promise((resolve) => {
-      const git = spawn('git', args, { stdio: ['pipe', 'pipe', 'pipe'] });
+      const git = spawn("git", args, { stdio: ["pipe", "pipe", "pipe"] });
 
-      let output = '';
-      let error = '';
+      let output = "";
+      let error = "";
 
-      git.stdout.on('data', (data) => {
+      git.stdout.on("data", (data) => {
         output += data.toString();
       });
 
-      git.stderr.on('data', (data) => {
+      git.stderr.on("data", (data) => {
         error += data.toString();
       });
 
-      git.on('close', (code) => {
+      git.on("close", (code) => {
         resolve({
           success: code === 0,
           output: output.trim(),
-          error: error.trim()
+          error: error.trim(),
         });
       });
     });
@@ -172,7 +178,7 @@ export class Utils {
    * Check if we're in a git repository
    */
   static async isGitRepository(): Promise<boolean> {
-    const result = await this.executeGitCommand(['rev-parse', '--git-dir']);
+    const result = await Utils.executeGitCommand(["rev-parse", "--git-dir"]);
     return result.success;
   }
 
@@ -180,7 +186,7 @@ export class Utils {
    * Get the current git branch name
    */
   static async getCurrentBranch(): Promise<string | null> {
-    const result = await this.executeGitCommand(['branch', '--show-current']);
+    const result = await Utils.executeGitCommand(["branch", "--show-current"]);
     return result.success ? result.output : null;
   }
 
@@ -188,37 +194,40 @@ export class Utils {
    * Check if there are uncommitted changes
    */
   static async hasUncommittedChanges(): Promise<boolean> {
-    const result = await this.executeGitCommand(['status', '--porcelain']);
+    const result = await Utils.executeGitCommand(["status", "--porcelain"]);
     return result.success && result.output.length > 0;
   }
 
   /**
    * Commit all changes with a descriptive message
    */
-  static async commitChanges(taskKey: string, taskSummary: string): Promise<{ success: boolean; message: string }> {
+  static async commitChanges(
+    taskKey: string,
+    taskSummary: string
+  ): Promise<{ success: boolean; message: string }> {
     try {
       // Check if we're in a git repository
-      if (!(await this.isGitRepository())) {
+      if (!(await Utils.isGitRepository())) {
         return {
           success: false,
-          message: 'Not in a git repository'
+          message: "Not in a git repository",
         };
       }
 
       // Check if there are any changes to commit
-      if (!(await this.hasUncommittedChanges())) {
+      if (!(await Utils.hasUncommittedChanges())) {
         return {
           success: false,
-          message: 'No changes to commit'
+          message: "No changes to commit",
         };
       }
 
       // Add all changes
-      const addResult = await this.executeGitCommand(['add', '.']);
+      const addResult = await Utils.executeGitCommand(["add", "."]);
       if (!addResult.success) {
         return {
           success: false,
-          message: `Failed to stage changes: ${addResult.error}`
+          message: `Failed to stage changes: ${addResult.error}`,
         };
       }
 
@@ -226,22 +235,25 @@ export class Utils {
       const commitMessage = `feat: implement ${taskKey} - ${taskSummary}`;
 
       // Commit changes
-      const commitResult = await this.executeGitCommand(['commit', '-m', commitMessage]);
+      const commitResult = await Utils.executeGitCommand([
+        "commit",
+        "-m",
+        commitMessage,
+      ]);
       if (commitResult.success) {
         return {
           success: true,
-          message: `Successfully committed changes for ${taskKey}`
-        };
-      } else {
-        return {
-          success: false,
-          message: `Failed to commit changes: ${commitResult.error}`
+          message: `Successfully committed changes for ${taskKey}`,
         };
       }
+      return {
+        success: false,
+        message: `Failed to commit changes: ${commitResult.error}`,
+      };
     } catch (error) {
       return {
         success: false,
-        message: `Git commit failed: ${(error as Error).message}`
+        message: `Git commit failed: ${(error as Error).message}`,
       };
     }
   }
@@ -251,80 +263,110 @@ export class Utils {
    */
   static async getMainBranchName(): Promise<string> {
     // First try to get default branch from git
-    const defaultBranch = await this.executeGitCommand(['symbolic-ref', 'refs/remotes/origin/HEAD']);
+    const defaultBranch = await Utils.executeGitCommand([
+      "symbolic-ref",
+      "refs/remotes/origin/HEAD",
+    ]);
     if (defaultBranch.success) {
-      const branchName = defaultBranch.output.replace('refs/remotes/origin/', '');
+      const branchName = defaultBranch.output.replace(
+        "refs/remotes/origin/",
+        ""
+      );
       if (branchName) {
         return branchName;
       }
     }
 
     // Check if 'main' exists
-    const mainExists = await this.executeGitCommand(['show-ref', '--verify', '--quiet', 'refs/heads/main']);
+    const mainExists = await Utils.executeGitCommand([
+      "show-ref",
+      "--verify",
+      "--quiet",
+      "refs/heads/main",
+    ]);
     if (mainExists.success) {
-      return 'main';
+      return "main";
     }
 
     // Check if 'master' exists
-    const masterExists = await this.executeGitCommand(['show-ref', '--verify', '--quiet', 'refs/heads/master']);
+    const masterExists = await Utils.executeGitCommand([
+      "show-ref",
+      "--verify",
+      "--quiet",
+      "refs/heads/master",
+    ]);
     if (masterExists.success) {
-      return 'master';
+      return "master";
     }
 
     // Default to 'main' if neither exists (for new repos)
-    return 'main';
+    return "main";
   }
 
   /**
    * Push current branch to remote repository
    */
-  static async pushCurrentBranch(): Promise<{ success: boolean; message: string }> {
+  static async pushCurrentBranch(): Promise<{
+    success: boolean;
+    message: string;
+  }> {
     try {
       // Get current branch name
-      const currentBranch = await this.getCurrentBranch();
+      const currentBranch = await Utils.getCurrentBranch();
       if (!currentBranch) {
         return {
           success: false,
-          message: 'Could not determine current branch'
+          message: "Could not determine current branch",
         };
       }
 
       // Check if remote branch exists
-      const remoteBranchExists = await this.executeGitCommand(['ls-remote', '--heads', 'origin', currentBranch]);
-      
+      const remoteBranchExists = await Utils.executeGitCommand([
+        "ls-remote",
+        "--heads",
+        "origin",
+        currentBranch,
+      ]);
+
       if (remoteBranchExists.success && remoteBranchExists.output.trim()) {
         // Remote branch exists, just push
-        const pushResult = await this.executeGitCommand(['push', 'origin', currentBranch]);
+        const pushResult = await Utils.executeGitCommand([
+          "push",
+          "origin",
+          currentBranch,
+        ]);
         if (pushResult.success) {
           return {
             success: true,
-            message: `Successfully pushed '${currentBranch}' to remote`
-          };
-        } else {
-          return {
-            success: false,
-            message: `Failed to push branch: ${pushResult.error}`
+            message: `Successfully pushed '${currentBranch}' to remote`,
           };
         }
-      } else {
-        // Remote branch doesn't exist, push with -u flag to set upstream
-        const pushResult = await this.executeGitCommand(['push', '-u', 'origin', currentBranch]);
-        if (pushResult.success) {
-          return {
-            success: true,
-            message: `Successfully pushed '${currentBranch}' to remote and set upstream`
-          };
-        } else {
-          return {
-            success: false,
-            message: `Failed to push branch: ${pushResult.error}`
-          };
-        }
+        return {
+          success: false,
+          message: `Failed to push branch: ${pushResult.error}`,
+        };
       }
+      // Remote branch doesn't exist, push with -u flag to set upstream
+      const pushResult = await Utils.executeGitCommand([
+        "push",
+        "-u",
+        "origin",
+        currentBranch,
+      ]);
+      if (pushResult.success) {
+        return {
+          success: true,
+          message: `Successfully pushed '${currentBranch}' to remote and set upstream`,
+        };
+      }
+      return {
+        success: false,
+        message: `Failed to push branch: ${pushResult.error}`,
+      };
     } catch (error) {
       return {
         success: false,
-        message: `Git push failed: ${(error as Error).message}`
+        message: `Git push failed: ${(error as Error).message}`,
       };
     }
   }
@@ -332,84 +374,100 @@ export class Utils {
   /**
    * Create and checkout a new feature branch for the task
    */
-  static async createFeatureBranch(taskKey: string): Promise<{ success: boolean; branchName: string; message: string }> {
+  static async createFeatureBranch(
+    taskKey: string,
+    baseBranch?: string
+  ): Promise<{ success: boolean; branchName: string; message: string }> {
     const baseBranchName = `feature/${taskKey.toLowerCase()}`;
     let branchName = baseBranchName;
     let attemptCounter = 1;
 
     try {
       // Check if we're in a git repository
-      if (!(await this.isGitRepository())) {
+      if (!(await Utils.isGitRepository())) {
         return {
           success: false,
           branchName,
-          message: 'Not in a git repository'
+          message: "Not in a git repository",
         };
       }
 
       // Check for uncommitted changes
-      if (await this.hasUncommittedChanges()) {
+      if (await Utils.hasUncommittedChanges()) {
         return {
           success: false,
           branchName,
-          message: 'There are uncommitted changes. Please commit or stash them before creating a feature branch.'
+          message:
+            "There are uncommitted changes. Please commit or stash them before creating a feature branch.",
         };
       }
 
-      // Switch to main/master branch first
-      const mainBranch = await this.getMainBranchName();
-      const currentBranch = await this.getCurrentBranch();
-      
-      if (currentBranch !== mainBranch) {
-        const switchResult = await this.executeGitCommand(['checkout', mainBranch]);
+      // Switch to target branch first (or main/master if not specified)
+      const targetBranch = baseBranch || (await Utils.getMainBranchName());
+      const currentBranch = await Utils.getCurrentBranch();
+
+      if (currentBranch !== targetBranch) {
+        const switchResult = await Utils.executeGitCommand([
+          "checkout",
+          targetBranch,
+        ]);
         if (!switchResult.success) {
           return {
             success: false,
             branchName,
-            message: `Failed to switch to ${mainBranch} branch: ${switchResult.error}`
+            message: `Failed to switch to ${targetBranch} branch: ${switchResult.error}`,
           };
         }
       }
 
       // Find an available branch name by checking for existing branches
       while (true) {
-        const branchExists = await this.executeGitCommand(['show-ref', '--verify', '--quiet', `refs/heads/${branchName}`]);
-        
+        const branchExists = await Utils.executeGitCommand([
+          "show-ref",
+          "--verify",
+          "--quiet",
+          `refs/heads/${branchName}`,
+        ]);
+
         if (!branchExists.success) {
           // Branch doesn't exist, we can use this name
           break;
         }
-        
+
         // Branch exists, try next attempt
         attemptCounter++;
         branchName = `${baseBranchName}-attempt-${attemptCounter}`;
       }
 
-      // Create and checkout new branch from main/master
-      const createResult = await this.executeGitCommand(['checkout', '-b', branchName]);
+      // Create and checkout new branch from target branch
+      const createResult = await Utils.executeGitCommand([
+        "checkout",
+        "-b",
+        branchName,
+      ]);
       if (createResult.success) {
-        const message = attemptCounter === 1 
-          ? `Created and switched to new branch '${branchName}' from ${mainBranch}`
-          : `Created and switched to new branch '${branchName}' from ${mainBranch} (previous attempts existed)`;
-        
+        const message =
+          attemptCounter === 1
+            ? `Created and switched to new branch '${branchName}' from ${targetBranch}`
+            : `Created and switched to new branch '${branchName}' from ${targetBranch} (previous attempts existed)`;
+
         return {
           success: true,
           branchName,
-          message
-        };
-      } else {
-        return {
-          success: false,
-          branchName,
-          message: `Failed to create branch: ${createResult.error}`
+          message,
         };
       }
+      return {
+        success: false,
+        branchName,
+        message: `Failed to create branch: ${createResult.error}`,
+      };
     } catch (error) {
       return {
         success: false,
         branchName,
-        message: `Git operation failed: ${(error as Error).message}`
+        message: `Git operation failed: ${(error as Error).message}`,
       };
     }
   }
-} 
+}
