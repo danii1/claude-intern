@@ -204,7 +204,7 @@ export class Utils {
   static async commitChanges(
     taskKey: string,
     taskSummary: string
-  ): Promise<{ success: boolean; message: string }> {
+  ): Promise<{ success: boolean; message: string; hookError?: string }> {
     try {
       // Check if we're in a git repository
       if (!(await Utils.isGitRepository())) {
@@ -246,9 +246,20 @@ export class Utils {
           message: `Successfully committed changes for ${taskKey}`,
         };
       }
+
+      // Treat any commit failure as a potential hook/fixable error
+      // The full error context (stdout + stderr) will be passed to Claude
+      // to diagnose and fix. This is more generic than keyword matching and
+      // handles all types of commit failures (hooks, linting, tests, etc.)
+      const fullError = [
+        commitResult.error,
+        commitResult.output
+      ].filter(Boolean).join("\n").trim();
+
       return {
         success: false,
         message: `Failed to commit changes: ${commitResult.error}`,
+        hookError: fullError || commitResult.error,
       };
     } catch (error) {
       return {
@@ -309,6 +320,7 @@ export class Utils {
   static async pushCurrentBranch(): Promise<{
     success: boolean;
     message: string;
+    hookError?: string;
   }> {
     try {
       // Get current branch name
@@ -328,9 +340,10 @@ export class Utils {
         currentBranch,
       ]);
 
+      let pushResult;
       if (remoteBranchExists.success && remoteBranchExists.output.trim()) {
         // Remote branch exists, just push
-        const pushResult = await Utils.executeGitCommand([
+        pushResult = await Utils.executeGitCommand([
           "push",
           "origin",
           currentBranch,
@@ -341,27 +354,35 @@ export class Utils {
             message: `Successfully pushed '${currentBranch}' to remote`,
           };
         }
-        return {
-          success: false,
-          message: `Failed to push branch: ${pushResult.error}`,
-        };
+      } else {
+        // Remote branch doesn't exist, push with -u flag to set upstream
+        pushResult = await Utils.executeGitCommand([
+          "push",
+          "-u",
+          "origin",
+          currentBranch,
+        ]);
+        if (pushResult.success) {
+          return {
+            success: true,
+            message: `Successfully pushed '${currentBranch}' to remote and set upstream`,
+          };
+        }
       }
-      // Remote branch doesn't exist, push with -u flag to set upstream
-      const pushResult = await Utils.executeGitCommand([
-        "push",
-        "-u",
-        "origin",
-        currentBranch,
-      ]);
-      if (pushResult.success) {
-        return {
-          success: true,
-          message: `Successfully pushed '${currentBranch}' to remote and set upstream`,
-        };
-      }
+
+      // Treat any push failure as a potential hook/fixable error
+      // The full error context (stdout + stderr) will be passed to Claude
+      // to diagnose and fix. This is more generic than keyword matching and
+      // handles all types of push failures (hooks, rejections, conflicts, etc.)
+      const fullError = [
+        pushResult.error,
+        pushResult.output
+      ].filter(Boolean).join("\n").trim();
+
       return {
         success: false,
         message: `Failed to push branch: ${pushResult.error}`,
+        hookError: fullError || pushResult.error,
       };
     } catch (error) {
       return {

@@ -4,7 +4,7 @@ import { type ChildProcess, execSync, spawn } from "child_process";
 import { program } from "commander";
 import { config } from "dotenv";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { dirname, join, resolve } from "path";
+import { join, resolve } from "path";
 import { ClaudeFormatter } from "./lib/claude-formatter";
 import { JiraClient } from "./lib/jira-client";
 import { PRManager } from "./lib/pr-client";
@@ -23,6 +23,7 @@ interface ProgramOptions {
   prTargetBranch: string; // Target branch for PR
   jql?: string; // JQL query for batch processing
   skipJiraComments: boolean; // New option to skip posting comments to JIRA
+  hookRetries: string; // Number of retries for git hook failures
 }
 
 interface ClarityAssessment {
@@ -180,6 +181,11 @@ program
   .option(
     "--skip-jira-comments",
     "Skip posting comments to JIRA (for testing)"
+  )
+  .option(
+    "--hook-retries <number>",
+    "Number of retry attempts for git hook failures",
+    "10"
   )
   .parse();
 
@@ -522,7 +528,8 @@ async function processSingleTask(
         options.createPr,
         options.prTargetBranch,
         jiraClient,
-        options.skipJiraComments
+        options.skipJiraComments,
+        Number.parseInt(options.hookRetries)
       );
     } else {
       console.log("\n✅ Task details saved. You can now:");
@@ -817,7 +824,7 @@ async function runClarityCheck(
 
             if (assessment.issues.length > 0) {
               console.log("\n🚨 Critical issues identified:");
-              assessment.issues.forEach((issue, index) => {
+              assessment.issues.forEach((issue) => {
                 const severityIcon =
                   issue.severity === "critical"
                     ? "🔴"
@@ -1027,7 +1034,7 @@ async function postAssessmentFailure(
   jiraClient: JiraClient,
   taskKey: string,
   failureType: "max-turns" | "parse-error",
-  rawOutput: string
+  _rawOutput: string
 ): Promise<void> {
   try {
     const isMaxTurns = failureType === "max-turns";
@@ -1256,6 +1263,156 @@ async function postClarityComment(
   }
 }
 
+// Function to log git hook errors to file
+function logHookErrorToFile(
+  taskKey: string,
+  hookType: string,
+  attempt: number,
+  error: string,
+  fixed: boolean
+): void {
+  try {
+    const baseOutputDir =
+      process.env.CLAUDE_INTERN_OUTPUT_DIR || "/tmp/claude-intern-tasks";
+    const taskDir = join(baseOutputDir, taskKey.toLowerCase());
+    const hookErrorFile = join(taskDir, "git-hook-errors.log");
+
+    const timestamp = new Date().toISOString();
+    const status = fixed ? "FIXED" : "FAILED";
+    const logEntry = `
+${"=".repeat(80)}
+Timestamp: ${timestamp}
+Hook Type: ${hookType}
+Attempt: ${attempt}
+Status: ${status}
+Error:
+${error}
+${"=".repeat(80)}
+`;
+
+    // Append to log file
+    const existingContent = existsSync(hookErrorFile)
+      ? readFileSync(hookErrorFile, "utf8")
+      : "# Git Hook Errors Log\n\n";
+
+    writeFileSync(hookErrorFile, existingContent + logEntry, "utf8");
+    console.log(`💾 Hook error logged to: ${hookErrorFile}`);
+  } catch (saveError) {
+    console.warn(`⚠️  Failed to save hook error to file: ${saveError}`);
+  }
+}
+
+// Function to run Claude to fix git hook errors
+async function runClaudeToFixGitHook(
+  hookType: "commit" | "push",
+  claudePath: string,
+  maxTurns: number
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    console.log("\n🔧 Attempting to fix git hook errors with Claude...");
+
+    // Create a concise prompt that asks Claude to re-run the git command
+    // This avoids context length issues from including full error output
+    const gitCommand = hookType === "commit"
+      ? "git commit"
+      : "git push origin HEAD";
+
+    // Get the path to the git-hook-errors.log file
+    const baseOutputDir =
+      process.env.CLAUDE_INTERN_OUTPUT_DIR || "/tmp/claude-intern-tasks";
+    const gitHookErrorLog = `${baseOutputDir}/*/git-hook-errors.log`;
+
+    const fixPrompt = `# Git Hook Error - Fix Required
+
+The git ${hookType} operation has failed, likely due to pre-${hookType} hooks checking code quality.
+
+## Your Task
+
+1. **Review recent hook errors** (optional but helpful):
+   \`\`\`bash
+   tail -n 100 ${gitHookErrorLog}
+   \`\`\`
+   This shows the last 100 lines of previous hook errors to understand patterns.
+
+2. **Run the git command** to see what failed:
+   \`\`\`bash
+   ${gitCommand}
+   \`\`\`
+
+3. **Analyze the error output** and fix all issues. Common problems include:
+   - **Linting errors**: Fix code style, formatting, or linting issues
+   - **Test failures**: Fix failing tests or update test expectations
+   - **Type errors**: Resolve TypeScript or type-checking issues
+   - **Formatting issues**: Run formatters or fix code formatting
+   - **Security issues**: Address security vulnerabilities or dependency issues
+
+4. **Verify the fix** by running the command again to ensure it succeeds.
+
+**Important**:
+- Only fix the issues mentioned in the error output
+- Do not modify unrelated code
+- Ensure all tests pass if the hook runs tests
+- Follow the project's coding standards and conventions
+`;
+
+    let stdoutOutput = "";
+    let stderrOutput = "";
+
+    // Spawn Claude process to fix the issues
+    const claude: ChildProcess = spawn(
+      claudePath,
+      [
+        "-p",
+        "--dangerously-skip-permissions",
+        "--max-turns",
+        maxTurns.toString(),
+      ],
+      {
+        stdio: ["pipe", "pipe", "pipe"],
+      }
+    );
+
+    // Capture stdout
+    if (claude.stdout) {
+      claude.stdout.on("data", (data: Buffer) => {
+        const output = data.toString();
+        stdoutOutput += output;
+        process.stdout.write(output);
+      });
+    }
+
+    // Capture stderr
+    if (claude.stderr) {
+      claude.stderr.on("data", (data: Buffer) => {
+        const output = data.toString();
+        stderrOutput += output;
+        process.stderr.write(output);
+      });
+    }
+
+    claude.on("error", (error: NodeJS.ErrnoException) => {
+      console.error(`❌ Failed to run Claude for git hook fix: ${error.message}`);
+      resolve(false);
+    });
+
+    claude.on("close", (code: number | null) => {
+      if (code === 0) {
+        console.log("\n✅ Claude completed fixing git hook errors");
+        resolve(true);
+      } else {
+        console.log(`\n❌ Claude exited with code ${code} while fixing git hook errors`);
+        resolve(false);
+      }
+    });
+
+    // Send the fix prompt to Claude
+    if (claude.stdin) {
+      claude.stdin.write(fixPrompt);
+      claude.stdin.end();
+    }
+  });
+}
+
 // Function to run Claude with the formatted task
 async function runClaude(
   taskFile: string,
@@ -1268,7 +1425,8 @@ async function runClaude(
   createPr = false,
   prTargetBranch = "main",
   jiraClient?: JiraClient,
-  skipJiraComments = false
+  skipJiraComments = false,
+  hookRetries = 10
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     // Check if task file exists
@@ -1452,98 +1610,213 @@ async function runClaude(
         // Commit changes if git is enabled and we have task details
         if (enableGit && taskKey && taskSummary) {
           console.log("\n📝 Committing changes...");
-          Utils.commitChanges(taskKey, taskSummary)
-            .then(async (commitResult) => {
+
+          // Try committing with retry logic for git hook failures
+          const handleCommitWithRetry = async () => {
+            let attempt = 0;
+
+            while (attempt <= hookRetries) {
+              attempt++;
+              const commitResult = await Utils.commitChanges(taskKey, taskSummary);
+
               if (commitResult.success) {
                 console.log(`✅ ${commitResult.message}`);
+                return { success: true, result: commitResult };
+              }
 
-                // Create pull request if requested
-                if (createPr && issue) {
-                  console.log("\n📤 Pushing branch to remote...");
-                  const pushResult = await Utils.pushCurrentBranch();
+              // Check if this is a git hook error that we can try to fix
+              if (commitResult.hookError && attempt <= hookRetries) {
+                console.log(`\n⚠️  Git hook failed (attempt ${attempt}/${hookRetries + 1})`);
 
-                  if (pushResult.success) {
-                    console.log(`✅ ${pushResult.message}`);
+                // Try to fix the hook error with Claude
+                const fixed = await runClaudeToFixGitHook(
+                  "commit",
+                  claudePath,
+                  maxTurns
+                );
 
-                    console.log("\n🔀 Creating pull request...");
-                    try {
-                      const prManager = new PRManager();
-                      const currentBranch = await Utils.getCurrentBranch();
+                // Log the hook error to file
+                logHookErrorToFile(
+                  taskKey,
+                  "commit",
+                  attempt,
+                  commitResult.hookError,
+                  fixed
+                );
 
-                      if (currentBranch) {
-                        const prResult = await prManager.createPullRequest(
-                          issue,
-                          currentBranch,
-                          prTargetBranch,
-                          stdoutOutput // Use Claude's output as implementation summary
+                if (fixed) {
+                  console.log("\n🔄 Retrying commit after Claude fixed the issues...");
+                  continue;
+                } else {
+                  console.log("\n❌ Could not fix git hook errors automatically");
+                  return { success: false, result: commitResult };
+                }
+              } else {
+                // Not a hook error or out of retries
+                if (attempt > hookRetries) {
+                  console.log(`\n❌ Max retries (${hookRetries}) exceeded for git hook fixes`);
+                }
+                console.log(`⚠️  ${commitResult.message}`);
+                return { success: false, result: commitResult };
+              }
+            }
+
+            return { success: false, result: { message: "Max retries exceeded" } };
+          };
+
+          handleCommitWithRetry()
+            .then(async ({ success }) => {
+              if (!success) {
+                console.log(
+                  'You can commit changes manually with: git add . && git commit -m "feat: implement task"'
+                );
+                resolve();
+                return;
+              }
+
+              // Create pull request if requested
+              if (createPr && issue) {
+                console.log("\n📤 Pushing branch to remote...");
+
+                // Try pushing with retry logic for git hook failures
+                const handlePushWithRetry = async () => {
+                  let attempt = 0;
+
+                  while (attempt <= hookRetries) {
+                    attempt++;
+                    const pushResult = await Utils.pushCurrentBranch();
+
+                    if (pushResult.success) {
+                      console.log(`✅ ${pushResult.message}`);
+                      return { success: true, result: pushResult };
+                    }
+
+                    // Check if this is a git hook error that we can try to fix
+                    if (pushResult.hookError && attempt <= hookRetries) {
+                      console.log(`\n⚠️  Git pre-push hook failed (attempt ${attempt}/${hookRetries + 1})`);
+
+                      // Try to fix the hook error with Claude
+                      const fixed = await runClaudeToFixGitHook(
+                        "push",
+                        claudePath,
+                        maxTurns
+                      );
+
+                      // Log the hook error to file
+                      logHookErrorToFile(
+                        taskKey,
+                        "push",
+                        attempt,
+                        pushResult.hookError,
+                        fixed
+                      );
+
+                      if (fixed) {
+                        console.log("\n🔄 Retrying push after Claude fixed the issues...");
+
+                        // Need to amend the commit with the fixes
+                        const amendResult = await Utils.executeGitCommand([
+                          "commit",
+                          "--amend",
+                          "--no-edit"
+                        ]);
+
+                        if (!amendResult.success) {
+                          console.log("⚠️  Could not amend commit with fixes");
+                          return { success: false, result: pushResult };
+                        }
+
+                        continue;
+                      } else {
+                        console.log("\n❌ Could not fix git pre-push hook errors automatically");
+                        return { success: false, result: pushResult };
+                      }
+                    } else {
+                      // Not a hook error or out of retries
+                      if (attempt > hookRetries) {
+                        console.log(`\n❌ Max retries (${hookRetries}) exceeded for git hook fixes`);
+                      }
+                      console.log(`⚠️  ${pushResult.message}`);
+                      return { success: false, result: pushResult };
+                    }
+                  }
+
+                  return { success: false, result: { message: "Max retries exceeded" } };
+                };
+
+                const pushOutcome = await handlePushWithRetry();
+
+                if (pushOutcome.success) {
+                  console.log("\n🔀 Creating pull request...");
+                  try {
+                    const prManager = new PRManager();
+                    const currentBranch = await Utils.getCurrentBranch();
+
+                    if (currentBranch) {
+                      const prResult = await prManager.createPullRequest(
+                        issue,
+                        currentBranch,
+                        prTargetBranch,
+                        stdoutOutput // Use Claude's output as implementation summary
+                      );
+
+                      if (prResult.success) {
+                        console.log(
+                          `✅ Pull request created: ${prResult.url}`
                         );
 
-                        if (prResult.success) {
-                          console.log(
-                            `✅ Pull request created: ${prResult.url}`
-                          );
-
-                          // Transition JIRA status if configured
-                          const prStatus = process.env.JIRA_PR_STATUS;
-                          if (
-                            prStatus &&
-                            prStatus.trim() &&
-                            taskKey &&
-                            jiraClient &&
-                            !skipJiraComments
-                          ) {
-                            try {
-                              console.log(
-                                "\n🔄 Transitioning JIRA status after PR creation..."
-                              );
-                              await jiraClient.transitionIssue(
-                                taskKey,
-                                prStatus.trim()
-                              );
-                            } catch (statusError) {
-                              console.warn(
-                                `⚠️  Failed to transition JIRA status: ${
-                                  (statusError as Error).message
-                                }`
-                              );
-                              console.log(
-                                "   PR was created successfully, but status transition failed"
-                              );
-                            }
-                          } else if (skipJiraComments) {
+                        // Transition JIRA status if configured
+                        const prStatus = process.env.JIRA_PR_STATUS;
+                        if (
+                          prStatus &&
+                          prStatus.trim() &&
+                          taskKey &&
+                          jiraClient &&
+                          !skipJiraComments
+                        ) {
+                          try {
                             console.log(
-                              "\n⏭️  Skipping JIRA status transition (--skip-jira-comments)"
+                              "\n🔄 Transitioning JIRA status after PR creation..."
+                            );
+                            await jiraClient.transitionIssue(
+                              taskKey,
+                              prStatus.trim()
+                            );
+                          } catch (statusError) {
+                            console.warn(
+                              `⚠️  Failed to transition JIRA status: ${
+                                (statusError as Error).message
+                              }`
+                            );
+                            console.log(
+                              "   PR was created successfully, but status transition failed"
                             );
                           }
-                        } else {
+                        } else if (skipJiraComments) {
                           console.log(
-                            `⚠️  PR creation failed: ${prResult.message}`
+                            "\n⏭️  Skipping JIRA status transition (--skip-jira-comments)"
                           );
                         }
                       } else {
                         console.log(
-                          "⚠️  Could not determine current branch for PR creation"
+                          `⚠️  PR creation failed: ${prResult.message}`
                         );
                       }
-                    } catch (prError) {
+                    } else {
                       console.log(
-                        `⚠️  PR creation failed: ${(prError as Error).message}`
+                        "⚠️  Could not determine current branch for PR creation"
                       );
                     }
-                  } else {
+                  } catch (prError) {
                     console.log(
-                      `⚠️  Failed to push branch: ${pushResult.message}`
-                    );
-                    console.log(
-                      "   Cannot create PR without pushing branch to remote"
+                      `⚠️  PR creation failed: ${(prError as Error).message}`
                     );
                   }
+                } else {
+                  console.log(
+                    "   Cannot create PR without pushing branch to remote"
+                  );
                 }
-              } else {
-                console.log(`⚠️  ${commitResult.message}`);
-                console.log(
-                  'You can commit changes manually with: git add . && git commit -m "feat: implement task"'
-                );
               }
               resolve();
             })
