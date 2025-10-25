@@ -1346,13 +1346,21 @@ The git ${hookType} operation has failed, likely due to pre-${hookType} hooks ch
    - **Formatting issues**: Run formatters or fix code formatting
    - **Security issues**: Address security vulnerabilities or dependency issues
 
-4. **Verify the fix** by running the command again to ensure it succeeds.
+4. **Stage your changes** with:
+   \`\`\`bash
+   git add .
+   \`\`\`
+
+5. ${hookType === "commit"
+    ? "**Retry the commit** to verify it succeeds."
+    : "**Amend the existing commit** with your fixes:\n   ```bash\n   git commit --amend --no-edit\n   ```\n\n6. **Verify the fix** by running the push command again to ensure it succeeds."}
 
 **Important**:
 - Only fix the issues mentioned in the error output
 - Do not modify unrelated code
 - Ensure all tests pass if the hook runs tests
 - Follow the project's coding standards and conventions
+${hookType === "push" ? "- Make sure to amend the commit so the fixes are included in the push" : ""}
 `;
 
     let stdoutOutput = "";
@@ -1395,10 +1403,46 @@ The git ${hookType} operation has failed, likely due to pre-${hookType} hooks ch
       resolve(false);
     });
 
-    claude.on("close", (code: number | null) => {
+    claude.on("close", async (code: number | null) => {
       if (code === 0) {
-        console.log("\n✅ Claude completed fixing git hook errors");
-        resolve(true);
+        console.log("\n🔍 Claude completed - verifying the fix actually worked...");
+
+        // Verify the fix by checking git status
+        // For push: Claude should have amended the commit, so we just verify nothing is staged
+        // For commit: Claude should have completed the commit, so we verify a clean state
+        try {
+          const statusResult = await Utils.executeGitCommand(["status", "--porcelain"]);
+
+          if (hookType === "commit") {
+            // For commit fix: verify nothing is staged/modified (commit succeeded)
+            if (statusResult.success && statusResult.output.trim() === "") {
+              console.log("✅ Verification successful - commit completed successfully!");
+              resolve(true);
+            } else {
+              console.log("❌ Verification failed - changes still uncommitted:");
+              console.log(`   ${statusResult.output}`);
+              resolve(false);
+            }
+          } else {
+            // For push fix: verify changes are committed and ready to push
+            // Claude should have amended, so check if we can push
+            const pushDryRun = await Utils.executeGitCommand([
+              "push", "origin", "HEAD", "--dry-run"
+            ]);
+
+            if (pushDryRun.success) {
+              console.log("✅ Verification successful - changes are committed and ready to push!");
+              resolve(true);
+            } else {
+              console.log("❌ Verification failed - push would still fail:");
+              console.log(`   ${pushDryRun.error || pushDryRun.output}`);
+              resolve(false);
+            }
+          }
+        } catch (verifyError) {
+          console.log(`❌ Could not verify fix: ${verifyError}`);
+          resolve(false);
+        }
       } else {
         console.log(`\n❌ Claude exited with code ${code} while fixing git hook errors`);
         resolve(false);
@@ -1584,27 +1628,6 @@ async function runClaude(
           console.log("   Check the output above for specific issues");
         } else {
           console.log("✅ Claude execution completed successfully");
-
-          // Post Claude's output to JIRA only if implementation seems successful
-          if (taskKey && stdoutOutput.trim() && !skipJiraComments) {
-            try {
-              console.log("\n💬 Posting implementation summary to JIRA...");
-              await postImplementationComment(
-                taskKey,
-                stdoutOutput,
-                taskSummary
-              );
-            } catch (commentError) {
-              console.warn(
-                `⚠️  Failed to post implementation comment to JIRA: ${commentError}`
-              );
-              console.log(
-                "   Implementation completed successfully, but JIRA comment failed"
-              );
-            }
-          } else if (skipJiraComments && taskKey) {
-            console.log("\n⏭️  Skipping JIRA comment posting (--skip-jira-comments)");
-          }
         }
 
         // Commit changes if git is enabled and we have task details
@@ -1712,20 +1735,8 @@ async function runClaude(
                       );
 
                       if (fixed) {
-                        console.log("\n🔄 Retrying push after Claude fixed the issues...");
-
-                        // Need to amend the commit with the fixes
-                        const amendResult = await Utils.executeGitCommand([
-                          "commit",
-                          "--amend",
-                          "--no-edit"
-                        ]);
-
-                        if (!amendResult.success) {
-                          console.log("⚠️  Could not amend commit with fixes");
-                          return { success: false, result: pushResult };
-                        }
-
+                        console.log("\n🔄 Retrying push after Claude fixed and amended the commit...");
+                        // Claude was instructed to amend the commit, so just retry the push
                         continue;
                       } else {
                         console.log("\n❌ Could not fix git pre-push hook errors automatically");
@@ -1747,6 +1758,27 @@ async function runClaude(
                 const pushOutcome = await handlePushWithRetry();
 
                 if (pushOutcome.success) {
+                  // Post implementation summary to JIRA after successful push
+                  if (taskKey && stdoutOutput.trim() && !skipJiraComments) {
+                    try {
+                      console.log("\n💬 Posting implementation summary to JIRA...");
+                      await postImplementationComment(
+                        taskKey,
+                        stdoutOutput,
+                        taskSummary
+                      );
+                    } catch (commentError) {
+                      console.warn(
+                        `⚠️  Failed to post implementation comment to JIRA: ${commentError}`
+                      );
+                      console.log(
+                        "   Push succeeded, but JIRA comment failed"
+                      );
+                    }
+                  } else if (skipJiraComments && taskKey) {
+                    console.log("\n⏭️  Skipping JIRA comment posting (--skip-jira-comments)");
+                  }
+
                   console.log("\n🔀 Creating pull request...");
                   try {
                     const prManager = new PRManager();
@@ -1816,6 +1848,27 @@ async function runClaude(
                   console.log(
                     "   Cannot create PR without pushing branch to remote"
                   );
+                }
+              } else {
+                // No PR requested, but commit succeeded - post to JIRA here
+                if (taskKey && stdoutOutput.trim() && !skipJiraComments) {
+                  try {
+                    console.log("\n💬 Posting implementation summary to JIRA...");
+                    await postImplementationComment(
+                      taskKey,
+                      stdoutOutput,
+                      taskSummary
+                    );
+                  } catch (commentError) {
+                    console.warn(
+                      `⚠️  Failed to post implementation comment to JIRA: ${commentError}`
+                    );
+                    console.log(
+                      "   Commit succeeded, but JIRA comment failed"
+                    );
+                  }
+                } else if (skipJiraComments && taskKey) {
+                  console.log("\n⏭️  Skipping JIRA comment posting (--skip-jira-comments)");
                 }
               }
               resolve();

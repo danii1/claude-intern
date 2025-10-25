@@ -370,15 +370,29 @@ export class Utils {
         }
       }
 
-      // Treat any push failure as a potential hook/fixable error
-      // The full error context (stdout + stderr) will be passed to Claude
-      // to diagnose and fix. This is more generic than keyword matching and
-      // handles all types of push failures (hooks, rejections, conflicts, etc.)
+      // Check if this is a non-fixable git state error
       const fullError = [
         pushResult.error,
         pushResult.output
       ].filter(Boolean).join("\n").trim();
 
+      const isNonFastForward = fullError.includes("[rejected]") &&
+                               fullError.includes("non-fast-forward");
+      const isFetchFirst = fullError.includes("fetch first") ||
+                          fullError.includes("Updates were rejected");
+
+      // Non-fast-forward and similar errors are not fixable by Claude
+      // They require manual intervention (pull, rebase, or force push)
+      if (isNonFastForward || isFetchFirst) {
+        return {
+          success: false,
+          message: `Push rejected - branch diverged from remote. Run 'git pull --rebase' or 'git push --force' (dangerous): ${pushResult.error}`,
+          // Don't mark as hookError since this is not fixable by Claude
+        };
+      }
+
+      // Treat other push failures as potential hook/fixable errors
+      // The full error context (stdout + stderr) will be passed to Claude
       return {
         success: false,
         message: `Failed to push branch: ${pushResult.error}`,
