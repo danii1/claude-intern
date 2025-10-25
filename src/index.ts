@@ -3,7 +3,7 @@
 import { type ChildProcess, execSync, spawn } from "child_process";
 import { program } from "commander";
 import { config } from "dotenv";
-import { existsSync, mkdirSync, readFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join, resolve } from "path";
 import { ClaudeFormatter } from "./lib/claude-formatter";
 import { JiraClient } from "./lib/jira-client";
@@ -1304,12 +1304,34 @@ async function runClaude(
         const seemsIncomplete =
           hasErrors || hasGenuineFailures || hasMinimalOutput;
 
+        // Save implementation summary to task directory (even if incomplete for analysis)
+        if (taskKey && stdoutOutput.trim()) {
+          try {
+            const baseOutputDir =
+              process.env.CLAUDE_INTERN_OUTPUT_DIR || "/tmp/claude-intern-tasks";
+            const taskDir = join(baseOutputDir, taskKey.toLowerCase());
+            const summaryFile = join(
+              taskDir,
+              seemsIncomplete
+                ? "implementation-summary-incomplete.md"
+                : "implementation-summary.md"
+            );
+
+            writeFileSync(summaryFile, stdoutOutput, "utf8");
+            console.log(`\n💾 Saved implementation summary to: ${summaryFile}`);
+          } catch (saveError) {
+            console.warn(
+              `⚠️  Failed to save implementation summary: ${saveError}`
+            );
+          }
+        }
+
         if (seemsIncomplete) {
           console.log(
             "⚠️  Claude execution completed but appears to be incomplete or failed"
           );
           console.log(
-            "   No JIRA comment will be posted due to insufficient implementation"
+            "   Output saved for analysis but no JIRA comment will be posted"
           );
           console.log("   Check the output above for specific issues");
         } else {
