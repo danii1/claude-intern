@@ -403,14 +403,36 @@ export class Utils {
       }
 
       // Switch to target branch first (or main/master if not specified)
-      const targetBranch = baseBranch || (await Utils.getMainBranchName());
+      let targetBranch = baseBranch || (await Utils.getMainBranchName());
       const currentBranch = await Utils.getCurrentBranch();
 
       if (currentBranch !== targetBranch) {
-        const switchResult = await Utils.executeGitCommand([
+        let switchResult = await Utils.executeGitCommand([
           "checkout",
           targetBranch,
         ]);
+
+        // If checkout failed and we're trying a default branch (not user-specified),
+        // try the alternative default branch
+        if (!switchResult.success && !baseBranch) {
+          const alternativeBranch = targetBranch === "main" ? "master" : "main";
+          const altBranchExists = await Utils.executeGitCommand([
+            "show-ref",
+            "--verify",
+            "--quiet",
+            `refs/heads/${alternativeBranch}`,
+          ]);
+
+          if (altBranchExists.success) {
+            console.log(`⚠️  Branch '${targetBranch}' not found, trying '${alternativeBranch}'...`);
+            targetBranch = alternativeBranch;
+            switchResult = await Utils.executeGitCommand([
+              "checkout",
+              alternativeBranch,
+            ]);
+          }
+        }
+
         if (!switchResult.success) {
           return {
             success: false,
