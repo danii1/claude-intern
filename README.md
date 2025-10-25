@@ -121,6 +121,13 @@ claude-intern TASK-123 --create-pr
 
 # Create pull request targeting specific branch
 claude-intern TASK-123 --create-pr --pr-target-branch develop
+
+# Testing options - skip ALL JIRA comments (feasibility + implementation)
+claude-intern TASK-123 --skip-jira-comments
+
+# Local testing without PR (commits stay local, no push to remote)
+# Simply omit --create-pr to skip pushing to remote
+claude-intern TASK-123 --skip-jira-comments
 ```
 
 #### Local Development Usage
@@ -198,13 +205,27 @@ claude-intern --jql "sprint in openSprints() AND assignee = currentUser()" --max
 
 3. Creates a feature branch named `feature/task-id` (e.g., `feature/proj-123`)
 
-4. Runs `claude -p` with enhanced permissions and extended conversation limits for automatic implementation
+4. Runs optional feasibility assessment to validate task clarity (skippable with `--skip-clarity-check`)
+   - Posts assessment results to JIRA (skippable with `--skip-jira-comments`)
+   - Saves assessment results for debugging:
+     - `{output-dir}/{task-key}/feasibility-assessment.md` (formatted results with JSON)
+     - `{output-dir}/{task-key}/feasibility-assessment-failed.txt` (raw output on parse failure)
 
-5. Automatically commits all changes with a descriptive commit message after Claude completes successfully
+5. Runs `claude -p` with enhanced permissions and extended conversation limits for automatic implementation
 
-6. Pushes the feature branch to remote repository (when creating PRs)
+6. Saves Claude's implementation summary to local files for analysis:
+   - `{output-dir}/{task-key}/implementation-summary.md` (successful)
+   - `{output-dir}/{task-key}/implementation-summary-incomplete.md` (incomplete/failed)
 
-7. Optionally creates pull requests on GitHub or Bitbucket with detailed implementation summaries
+7. Automatically commits all changes with a descriptive commit message after Claude completes successfully
+
+8. Pushes the feature branch to remote repository (when creating PRs)
+
+9. Optionally creates pull requests on GitHub or Bitbucket with detailed implementation summaries
+
+10. Posts implementation results back to JIRA as comments (skippable with `--skip-jira-comments`)
+    - Includes feasibility assessment results
+    - Includes implementation summary
 
 ## Requirements
 

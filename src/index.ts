@@ -22,6 +22,7 @@ interface ProgramOptions {
   createPr: boolean; // New option to create pull request
   prTargetBranch: string; // Target branch for PR
   jql?: string; // JQL query for batch processing
+  skipJiraComments: boolean; // New option to skip posting comments to JIRA
 }
 
 interface ClarityAssessment {
@@ -175,6 +176,10 @@ program
     "--pr-target-branch <branch>",
     "Target branch for pull request",
     "main"
+  )
+  .option(
+    "--skip-jira-comments",
+    "Skip posting comments to JIRA (for testing)"
   )
   .parse();
 
@@ -450,7 +455,9 @@ async function processSingleTask(
         console.log(
           "   (Checking for fundamental requirements only - technical details will be inferred from code)"
         );
-        const clarityFile = outputFile.replace(".md", "-clarity.md");
+        // Use temporary file for clarity assessment input (will be cleaned up)
+        const { tmpdir } = require("os");
+        const clarityFile = join(tmpdir(), `clarity-${taskKey.toLowerCase()}-${Date.now()}.md`);
         ClaudeFormatter.saveClarityAssessment(
           taskDetails,
           clarityFile,
@@ -463,7 +470,8 @@ async function processSingleTask(
             clarityFile,
             resolvedClaudePath,
             taskKey,
-            jiraClient
+            jiraClient,
+            options.skipJiraComments
           );
 
           if (assessment && !assessment.isImplementable) {
@@ -478,7 +486,7 @@ async function processSingleTask(
             }
           }
 
-          // Clean up clarity file
+          // Clean up temporary clarity file
           try {
             require("fs").unlinkSync(clarityFile);
           } catch (cleanupError) {
@@ -492,6 +500,13 @@ async function processSingleTask(
           console.log(
             "   You can skip feasibility checks with --skip-clarity-check"
           );
+
+          // Clean up temporary clarity file on error too
+          try {
+            require("fs").unlinkSync(clarityFile);
+          } catch (cleanupError) {
+            // Ignore cleanup errors
+          }
         }
       }
 
@@ -506,7 +521,8 @@ async function processSingleTask(
         issue,
         options.createPr,
         options.prTargetBranch,
-        jiraClient
+        jiraClient,
+        options.skipJiraComments
       );
     } else {
       console.log("\n✅ Task details saved. You can now:");
@@ -667,7 +683,8 @@ async function runClarityCheck(
   clarityFile: string,
   claudePath: string,
   taskKey: string,
-  jiraClient: JiraClient
+  jiraClient: JiraClient,
+  skipJiraComments = false
 ): Promise<ClarityAssessment | null> {
   return new Promise((resolve, reject) => {
     // Check if clarity file exists
@@ -733,6 +750,45 @@ async function runClarityCheck(
           // Parse the JSON response from Claude
           const assessment = parseClarityResponse(stdoutOutput);
 
+          // Save assessment results to task directory for debugging
+          try {
+            const baseOutputDir =
+              process.env.CLAUDE_INTERN_OUTPUT_DIR || "/tmp/claude-intern-tasks";
+            const taskDir = join(baseOutputDir, taskKey.toLowerCase());
+            const assessmentResultFile = join(taskDir, "feasibility-assessment.md");
+
+            // Format assessment as readable markdown
+            let assessmentContent = `# Feasibility Assessment Results\n\n`;
+            assessmentContent += `**Status**: ${assessment.isImplementable ? '✅ Implementable' : '❌ Not Implementable'}\n`;
+            assessmentContent += `**Clarity Score**: ${assessment.clarityScore}/10\n\n`;
+            assessmentContent += `## Summary\n\n${assessment.summary}\n\n`;
+
+            if (assessment.issues.length > 0) {
+              assessmentContent += `## Issues\n\n`;
+              assessment.issues.forEach((issue) => {
+                const severityIcon = issue.severity === "critical" ? "🔴" : issue.severity === "major" ? "🟡" : "🔵";
+                assessmentContent += `### ${severityIcon} ${issue.category} (${issue.severity})\n\n`;
+                assessmentContent += `${issue.description}\n\n`;
+              });
+            }
+
+            if (assessment.recommendations.length > 0) {
+              assessmentContent += `## Recommendations\n\n`;
+              assessment.recommendations.forEach((rec, index) => {
+                assessmentContent += `${index + 1}. ${rec}\n`;
+              });
+              assessmentContent += `\n`;
+            }
+
+            // Also save raw JSON for programmatic access
+            assessmentContent += `## Raw JSON\n\n\`\`\`json\n${JSON.stringify(assessment, null, 2)}\n\`\`\`\n`;
+
+            writeFileSync(assessmentResultFile, assessmentContent, "utf8");
+            console.log(`\n💾 Saved feasibility assessment to: ${assessmentResultFile}`);
+          } catch (saveError) {
+            console.warn(`⚠️  Failed to save feasibility assessment: ${saveError}`);
+          }
+
           if (assessment.isImplementable) {
             console.log("\n✅ Task feasibility assessment passed");
             console.log(
@@ -746,8 +802,12 @@ async function runClarityCheck(
             }
 
             // Post successful assessment to JIRA as well for feedback
-            console.log("\n💬 Posting feasibility assessment to JIRA...");
-            await postClarityComment(jiraClient, taskKey, assessment);
+            if (!skipJiraComments) {
+              console.log("\n💬 Posting feasibility assessment to JIRA...");
+              await postClarityComment(jiraClient, taskKey, assessment);
+            } else {
+              console.log("\n⏭️  Skipping feasibility assessment JIRA comment (--skip-jira-comments)");
+            }
           } else {
             console.log("\n❌ Task feasibility assessment failed");
             console.log(
@@ -778,7 +838,11 @@ async function runClarityCheck(
             }
 
             // Post comment to JIRA with clarity issues
-            await postClarityComment(jiraClient, taskKey, assessment);
+            if (!skipJiraComments) {
+              await postClarityComment(jiraClient, taskKey, assessment);
+            } else {
+              console.log("\n⏭️  Skipping failed assessment JIRA comment (--skip-jira-comments)");
+            }
 
             console.log(
               "\n🛑 Stopping execution - fundamental requirements unclear"
@@ -797,6 +861,19 @@ async function runClarityCheck(
           );
           console.log("Raw Claude output:", stdoutOutput);
 
+          // Save failed assessment output for debugging
+          try {
+            const baseOutputDir =
+              process.env.CLAUDE_INTERN_OUTPUT_DIR || "/tmp/claude-intern-tasks";
+            const taskDir = join(baseOutputDir, taskKey.toLowerCase());
+            const failedAssessmentFile = join(taskDir, "feasibility-assessment-failed.txt");
+
+            writeFileSync(failedAssessmentFile, stdoutOutput, "utf8");
+            console.log(`\n💾 Saved failed assessment output to: ${failedAssessmentFile}`);
+          } catch (saveError) {
+            console.warn(`⚠️  Failed to save assessment output: ${saveError}`);
+          }
+
           // Check if Claude reached max turns or had other issues
           if (
             stdoutOutput.includes("Reached max turns") ||
@@ -808,42 +885,54 @@ async function runClarityCheck(
             console.log(
               "   This may indicate task complexity or insufficient details"
             );
-            console.log(
-              "   Will attempt to proceed with implementation but posting failure to JIRA...\n"
-            );
-
-            // Post assessment failure to JIRA
-            try {
-              await postAssessmentFailure(
-                jiraClient,
-                taskKey,
-                "max-turns",
-                stdoutOutput
+            if (!skipJiraComments) {
+              console.log(
+                "   Will attempt to proceed with implementation but posting failure to JIRA...\n"
               );
-            } catch (jiraError) {
-              console.warn(
-                "Failed to post assessment failure to JIRA:",
-                jiraError
+
+              // Post assessment failure to JIRA
+              try {
+                await postAssessmentFailure(
+                  jiraClient,
+                  taskKey,
+                  "max-turns",
+                  stdoutOutput
+                );
+              } catch (jiraError) {
+                console.warn(
+                  "Failed to post assessment failure to JIRA:",
+                  jiraError
+                );
+              }
+            } else {
+              console.log(
+                "   Will attempt to proceed with implementation (skipping JIRA comment)...\n"
               );
             }
           } else {
             console.log("\n⚠️  Could not parse clarity assessment response");
-            console.log(
-              "   Will attempt to proceed with implementation but posting failure to JIRA...\n"
-            );
-
-            // Post assessment failure to JIRA
-            try {
-              await postAssessmentFailure(
-                jiraClient,
-                taskKey,
-                "parse-error",
-                stdoutOutput
+            if (!skipJiraComments) {
+              console.log(
+                "   Will attempt to proceed with implementation but posting failure to JIRA...\n"
               );
-            } catch (jiraError) {
-              console.warn(
-                "Failed to post assessment failure to JIRA:",
-                jiraError
+
+              // Post assessment failure to JIRA
+              try {
+                await postAssessmentFailure(
+                  jiraClient,
+                  taskKey,
+                  "parse-error",
+                  stdoutOutput
+                );
+              } catch (jiraError) {
+                console.warn(
+                  "Failed to post assessment failure to JIRA:",
+                  jiraError
+                );
+              }
+            } else {
+              console.log(
+                "   Will attempt to proceed with implementation (skipping JIRA comment)...\n"
               );
             }
           }
@@ -1178,7 +1267,8 @@ async function runClaude(
   issue?: any,
   createPr = false,
   prTargetBranch = "main",
-  jiraClient?: JiraClient
+  jiraClient?: JiraClient,
+  skipJiraComments = false
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     // Check if task file exists
@@ -1338,7 +1428,7 @@ async function runClaude(
           console.log("✅ Claude execution completed successfully");
 
           // Post Claude's output to JIRA only if implementation seems successful
-          if (taskKey && stdoutOutput.trim()) {
+          if (taskKey && stdoutOutput.trim() && !skipJiraComments) {
             try {
               console.log("\n💬 Posting implementation summary to JIRA...");
               await postImplementationComment(
@@ -1354,6 +1444,8 @@ async function runClaude(
                 "   Implementation completed successfully, but JIRA comment failed"
               );
             }
+          } else if (skipJiraComments && taskKey) {
+            console.log("\n⏭️  Skipping JIRA comment posting (--skip-jira-comments)");
           }
         }
 
@@ -1397,7 +1489,8 @@ async function runClaude(
                             prStatus &&
                             prStatus.trim() &&
                             taskKey &&
-                            jiraClient
+                            jiraClient &&
+                            !skipJiraComments
                           ) {
                             try {
                               console.log(
@@ -1417,6 +1510,10 @@ async function runClaude(
                                 "   PR was created successfully, but status transition failed"
                               );
                             }
+                          } else if (skipJiraComments) {
+                            console.log(
+                              "\n⏭️  Skipping JIRA status transition (--skip-jira-comments)"
+                            );
                           }
                         } else {
                           console.log(

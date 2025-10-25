@@ -76,11 +76,14 @@ The application follows a modular TypeScript architecture optimized for Bun runt
 3. **Branch**: Create feature branch named `feature/{task-key}`
 4. **Assess**: Run optional clarity check to validate task implementability
 5. **Implement**: Execute Claude Code with formatted task details and enhanced permissions
-6. **Commit**: Automatically commit changes with descriptive message
-7. **Push**: Push feature branch to remote repository (when creating PRs)
-8. **PR Creation**: Optionally create pull requests on GitHub or Bitbucket
-9. **Status Transition**: Automatically transition JIRA task status after successful PR creation (if configured)
-10. **Report**: Post implementation summary back to JIRA task
+6. **Save**: Save implementation summary to local file for analysis
+   - Successful: `{output-dir}/{task-key}/implementation-summary.md`
+   - Incomplete: `{output-dir}/{task-key}/implementation-summary-incomplete.md`
+7. **Commit**: Automatically commit changes with descriptive message
+8. **Push**: Push feature branch to remote repository (when creating PRs)
+9. **PR Creation**: Optionally create pull requests on GitHub or Bitbucket
+10. **Status Transition**: Automatically transition JIRA task status after successful PR creation (if configured)
+11. **Report**: Post implementation summary back to JIRA task
 
 ### Batch Processing Workflow
 
@@ -150,6 +153,12 @@ Optional environment variables for workflow automation:
 - **Commit Control**: `--no-auto-commit` to skip automatic commits
 - **PR Creation**: `--create-pr` to automatically create pull requests after implementation
 - **PR Configuration**: `--pr-target-branch` to specify target branch (default: main)
+- **Testing Options**:
+  - `--skip-jira-comments` to skip posting all comments to JIRA (for testing)
+    - Skips feasibility assessment comments (success/failure)
+    - Skips implementation summary comments
+    - Skips assessment failure warnings
+    - Skips JIRA status transitions after PR creation
 - **Output Control**: `-v` for verbose logging
 - **Claude Configuration**: `--claude-path` and `--max-turns` for customization
 
@@ -166,6 +175,27 @@ Optional environment variables for workflow automation:
 - Real-time output streaming to user while capturing for JIRA posting
 - Detects completion status and max-turns errors
 - Posts rich-text implementation summaries back to JIRA using Atlassian Document Format
+
+### Output File Structure
+Each task creates a dedicated directory with all related files:
+```
+{CLAUDE_INTERN_OUTPUT_DIR}/{task-key}/
+├── task-details.md                         # Formatted task for Claude implementation
+├── feasibility-assessment.md               # Formatted assessment results (includes JSON)
+├── feasibility-assessment-failed.txt       # Raw output when parsing fails
+├── implementation-summary.md               # Claude's output (successful)
+├── implementation-summary-incomplete.md    # Claude's output (incomplete/failed)
+└── attachments/                            # Downloaded JIRA attachments
+    ├── image1.png
+    └── document.pdf
+```
+- Default output directory: `/tmp/claude-intern-tasks/`
+- Customizable via `CLAUDE_INTERN_OUTPUT_DIR` environment variable
+- All assessment and implementation files saved for debugging
+- Assessment results formatted as readable markdown with embedded JSON
+- Summaries contain raw Claude output without JIRA formatting
+- Assessment files preserved for analysis and troubleshooting
+- Assessment input uses temporary file (cleaned up automatically)
 
 ### Git Automation
 - Creates feature branches with consistent naming: `feature/{task-key-lowercase}`
@@ -265,6 +295,21 @@ claude-intern --jql "\"Epic Link\" = PROJ-100" --create-pr --pr-target-branch de
 
 # Process ready-for-development tasks with specific story points
 claude-intern --jql "status = 'Ready for Development' AND \"Story Points\" <= 5" --create-pr
+```
+
+### Testing and Development Options
+```bash
+# Test workflow without posting to JIRA (all implementation locally)
+claude-intern PROJ-123 --skip-jira-comments
+
+# Test without creating PR (commits stay local, no push to remote)
+claude-intern PROJ-123 --skip-jira-comments
+
+# Test batch processing without affecting JIRA
+claude-intern --jql "project = PROJ AND status = 'To Do'" --skip-jira-comments
+
+# Test end-to-end workflow locally with all safety flags
+claude-intern PROJ-123 --skip-jira-comments --skip-clarity-check
 ```
 
 The tool will use JIRA credentials from `.env` files and execute Claude in the current working directory, making it flexible for use across multiple projects.
