@@ -253,11 +253,36 @@ Each task creates a dedicated directory with all related files:
 
 ### Testing and Quality
 
-Currently no automated test framework is configured. Manual testing involves:
-1. Testing with various JIRA task types and configurations
-2. Validating Claude integration with different task complexities
-3. Verifying git operations in different repository states
-4. Testing error scenarios and edge cases
+The project uses Bun's native test runner for automated testing:
+
+**Running Tests:**
+- `bun test` - Run all tests across the test suite
+- `bun test tests/lock-manager.test.ts` - Run specific test file
+- `bun test --watch` - Run tests in watch mode
+
+**Test Structure:**
+- Tests are located in the `tests/` directory
+- Uses Bun's native `bun:test` API with `describe()`, `test()`, and `expect()`
+- Tests use isolated temporary directories to enable parallel execution
+- All 35 tests (8 settings, 6 lock manager, 21 CLI) pass consistently
+
+**Writing New Tests:**
+When adding tests, use Bun's native test API:
+```typescript
+import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+
+describe("MyFeature", () => {
+  test("should do something", () => {
+    expect(result).toBe(expected);
+  });
+});
+```
+
+**Test Isolation:**
+- Use temporary directories for tests that create files or acquire locks
+- Use `beforeEach()` to set up isolated state
+- Use `afterEach()` to clean up resources
+- This enables parallel test execution without conflicts
 
 ## Global Usage Pattern
 

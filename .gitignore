@@ -86,6 +86,7 @@ jspm_packages/
 
 dist/
 
-# Claude Intern - Keep credentials secure
+# Claude Intern - Keep credentials and lock files secure
 .claude-intern/.env
 .claude-intern/.env.local
+.claude-intern/.pid.lock

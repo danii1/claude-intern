@@ -1,5 +1,23 @@
 # Claude Intern Changelog
 
+## [1.1.1] - 2025-11-25
+
+### Added
+
+- **Instance Lock Mechanism**: Prevent multiple instances from running simultaneously in the same directory
+  - Lock file created in `.claude-intern/.pid.lock` when instance starts
+  - Automatic detection and cleanup of stale locks from crashed processes
+  - Graceful cleanup on process termination (SIGINT, SIGTERM, uncaught exceptions)
+  - Added to `.gitignore` to prevent committing lock files
+  - Comprehensive test suite with 6 test scenarios using Bun's native test runner
+  - Tests run in isolated temporary directories to enable parallel execution
+
+### Technical
+
+- Migrated lock manager tests to use Bun's native `bun:test` API for better integration
+- Added test isolation for CLI tests to prevent lock conflicts during parallel test execution
+- All 35 tests pass consistently with full parallel execution support
+
 ## [1.1.0] - 2025-11-25
 
 ### Added

@@ -1,27 +1,43 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
+import { mkdirSync, rmSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 
 const CLI_PATH = join(__dirname, "..", "src", "index.ts");
 
-// Helper to run the CLI
+// Helper to run the CLI in an isolated directory to avoid lock conflicts
 function runCLI(args: string[]): { stdout: string; stderr: string; exitCode: number } {
-  const result = spawnSync("bun", [CLI_PATH, ...args], {
-    encoding: "utf8",
-    timeout: 5000,
-    env: {
-      ...process.env,
-      JIRA_BASE_URL: "https://test.atlassian.net",
-      JIRA_EMAIL: "test@example.com",
-      JIRA_API_TOKEN: "test-token",
-    },
-  });
+  // Create unique temp directory for this test run
+  const testDir = join(tmpdir(), `cli-test-${Date.now()}-${Math.random().toString(36).substring(7)}`);
+  mkdirSync(testDir, { recursive: true });
 
-  return {
-    stdout: result.stdout || "",
-    stderr: result.stderr || "",
-    exitCode: result.status || 0,
-  };
+  try {
+    const result = spawnSync("bun", [CLI_PATH, ...args], {
+      encoding: "utf8",
+      timeout: 5000,
+      cwd: testDir, // Run in isolated directory
+      env: {
+        ...process.env,
+        JIRA_BASE_URL: "https://test.atlassian.net",
+        JIRA_EMAIL: "test@example.com",
+        JIRA_API_TOKEN: "test-token",
+      },
+    });
+
+    return {
+      stdout: result.stdout || "",
+      stderr: result.stderr || "",
+      exitCode: result.status || 0,
+    };
+  } finally {
+    // Clean up temp directory
+    try {
+      rmSync(testDir, { recursive: true, force: true });
+    } catch (e) {
+      // Ignore cleanup errors
+    }
+  }
 }
 
 describe("CLI Argument Handling", () => {

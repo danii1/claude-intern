@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join, resolve } from "path";
 import { ClaudeFormatter } from "./lib/claude-formatter";
 import { JiraClient } from "./lib/jira-client";
+import { LockManager } from "./lib/lock-manager";
 import { PRManager } from "./lib/pr-client";
 import { Utils } from "./lib/utils";
 import type { ProjectSettings } from "./types/settings";
@@ -155,9 +156,9 @@ CLAUDE_CLI_PATH=claude
     process.exit(1);
   }
 
-  // Update .gitignore to exclude .claude-intern/.env
+  // Update .gitignore to exclude .claude-intern/.env and lock file
   const gitignorePath = join(process.cwd(), ".gitignore");
-  const gitignoreEntries = [".claude-intern/.env", ".claude-intern/.env.local"];
+  const gitignoreEntries = [".claude-intern/.env", ".claude-intern/.env.local", ".claude-intern/.pid.lock"];
 
   try {
     let gitignoreContent = "";
@@ -356,7 +357,7 @@ program
   .description(
     "Your AI intern for automatically implementing JIRA tasks using Claude. Supports single tasks, multiple tasks, or JQL queries for batch processing."
   )
-  .version("1.1.0")
+  .version("1.1.1")
   .argument("[task-keys...]", "JIRA task key(s) (e.g., PROJ-123) or use --jql for query-based selection")
   .option(
     "--jql <query>",
@@ -780,9 +781,25 @@ async function processSingleTask(
   }
 }
 
+// Global lock manager instance
+let lockManager: LockManager | null = null;
+
 // Main execution function
 async function main(): Promise<void> {
   try {
+    // Acquire lock to prevent multiple instances
+    lockManager = new LockManager();
+    const lockResult = lockManager.acquire();
+
+    if (!lockResult.success) {
+      console.error(`❌ ${lockResult.message}`);
+      console.error("   Please wait for the other instance to complete or stop it manually.");
+      if (lockResult.pid) {
+        console.error(`   You can stop the other instance with: kill ${lockResult.pid}`);
+      }
+      process.exit(1);
+    }
+
     // Validate environment first
     validateEnvironment();
 
@@ -880,14 +897,27 @@ async function main(): Promise<void> {
       }
 
       if (results.failed > 0) {
+        // Release lock before exiting
+        if (lockManager) {
+          lockManager.release();
+        }
         process.exit(1);
       }
+    }
+
+    // Release lock on successful completion
+    if (lockManager) {
+      lockManager.release();
     }
   } catch (error) {
     const err = error as Error;
     console.error(`❌ Error: ${err.message}`);
     if (options.verbose && err.stack) {
       console.error(err.stack);
+    }
+    // Release lock before exiting on error
+    if (lockManager) {
+      lockManager.release();
     }
     process.exit(1);
   }
@@ -2117,6 +2147,40 @@ process.on("unhandledRejection", (error: Error) => {
   console.error("❌ Unhandled error:", error.message);
   if (options.verbose && error.stack) {
     console.error(error.stack);
+  }
+  // Release lock before exiting
+  if (lockManager) {
+    lockManager.release();
+  }
+  process.exit(1);
+});
+
+// Handle process termination signals
+process.on("SIGINT", () => {
+  console.log("\n\n⚠️  Received SIGINT (Ctrl+C), cleaning up...");
+  if (lockManager) {
+    lockManager.release();
+  }
+  process.exit(130); // Standard exit code for SIGINT
+});
+
+process.on("SIGTERM", () => {
+  console.log("\n\n⚠️  Received SIGTERM, cleaning up...");
+  if (lockManager) {
+    lockManager.release();
+  }
+  process.exit(143); // Standard exit code for SIGTERM
+});
+
+// Handle uncaught exceptions
+process.on("uncaughtException", (error: Error) => {
+  console.error("❌ Uncaught exception:", error.message);
+  if (error.stack) {
+    console.error(error.stack);
+  }
+  // Release lock before exiting
+  if (lockManager) {
+    lockManager.release();
   }
   process.exit(1);
 });

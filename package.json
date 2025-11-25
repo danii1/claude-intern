@@ -1,6 +1,6 @@
 {
   "name": "claude-intern",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "AI-powered task automation tool for JIRA and Linear. Automatically implement tasks using Claude Code with git integration and PR creation.",
   "type": "module",
   "main": "dist/index.js",
