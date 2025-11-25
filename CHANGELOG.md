@@ -1,5 +1,51 @@
 # Claude Intern Changelog
 
+## [1.1.0] - 2025-11-25
+
+### Added
+
+- **Init Command**: New `claude-intern init` command for easy project setup
+  - Creates `.claude-intern/` folder with project-specific configuration
+  - Generates `.env` file for JIRA credentials
+  - Creates `.env.sample` template with all configuration options
+  - Creates `settings.json` for per-project settings
+  - **Automatic .gitignore Protection**: Automatically adds `.claude-intern/.env` and `.claude-intern/.env.local` to `.gitignore` to prevent credential leaks
+
+- **Per-Project Settings**: New `settings.json` configuration file for project-specific behavior
+  - Configure different PR status transitions for different JIRA projects
+  - Example: `{"projects": {"PROJ": {"prStatus": "In Review"}, "ABC": {"prStatus": "Code Review"}}}`
+  - Automatically extracts project key from task key (e.g., "PROJ-123" → "PROJ")
+  - Per-project configuration takes precedence over global environment variables
+
+- **Enhanced Environment Configuration**: Improved configuration loading with priority order
+  1. Custom path (via `--env-file`)
+  2. **Project-specific** (`.claude-intern/.env`) - NEW
+  3. Current working directory (`.env`)
+  4. Home directory (`~/.env`)
+  5. Tool installation directory
+
+- **Comprehensive Test Suite**: Added 29 unit tests for reliability
+  - Settings management tests (8 tests)
+  - CLI argument handling tests (21 tests)
+  - All tests organized in `tests/` directory
+  - Full TypeScript type coverage including tests
+
+### Changed
+
+- **JIRA PR Status Configuration**: Moved from environment variable to `settings.json`
+  - `JIRA_PR_STATUS` environment variable deprecated in favor of per-project configuration
+  - Each JIRA project can now have its own status workflow
+  - Removed `JIRA_PR_STATUS` from `.env.sample` template
+
+- **CLI Architecture**: Improved command-line argument handling
+  - Fixed issue where `init` command conflicted with task key parsing
+  - Task keys like "DISCO-123" now work correctly alongside subcommands
+  - Early detection of `init` command to avoid Commander.js conflicts
+
+### Dependencies
+
+- Added `@types/bun` for better test type safety
+
 ## [1.0.1] - 2025-08-18
 
 ### Fixed

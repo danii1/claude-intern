@@ -123,15 +123,43 @@ For multiple tasks, the tool processes them sequentially with enhanced error han
 
 ### Environment Configuration
 
+#### Initialization Command
+The tool provides an `init` command to create project-specific configuration:
+```bash
+claude-intern init
+```
+This creates a `.claude-intern` folder with:
+- `.env` - Project-specific configuration file with JIRA credentials
+- `.env.sample` - Template with all configuration options
+- `settings.json` - Per-project settings (PR status transitions, etc.)
+
+**Automatic .gitignore Protection:** The `init` command automatically adds `.claude-intern/.env` and `.claude-intern/.env.local` to the project's `.gitignore` file (creating it if needed) to prevent credential leaks to version control.
+
+#### Per-Project Settings (settings.json)
+The `settings.json` file in `.claude-intern/` allows configuring project-specific behavior:
+
+```json
+{
+  "projects": {
+    "PROJ": { "prStatus": "In Review" },
+    "ABC": { "prStatus": "Code Review" }
+  }
+}
+```
+
+**Note**: Each project key can have its own `prStatus` configuration. If not configured for a specific project, no status transition will occur after PR creation. This allows different JIRA projects to have different workflow statuses.
+
+#### Configuration Loading Priority
 The tool loads `.env` files from multiple locations in priority order:
 1. Custom path specified with `--env-file`
-2. Current working directory
-3. User home directory
-4. Tool installation directory
+2. **Project-specific** (`.claude-intern/.env` - recommended for per-project configuration)
+3. Current working directory (`.env`)
+4. User home directory (`~/.env`)
+5. Tool installation directory
 
 Required environment variables:
 - `JIRA_BASE_URL` - Your JIRA instance URL
-- `JIRA_EMAIL` - Your JIRA email address  
+- `JIRA_EMAIL` - Your JIRA email address
 - `JIRA_API_TOKEN` - JIRA API token for authentication
 
 Optional environment variables for PR creation:
@@ -139,11 +167,16 @@ Optional environment variables for PR creation:
 - `BITBUCKET_TOKEN` - Bitbucket app password for creating PRs
 
 Optional environment variables for workflow automation:
-- `JIRA_PR_STATUS` - JIRA status to transition task to after successful PR creation (e.g., "In Review", "Code Review")
 - `CLAUDE_INTERN_OUTPUT_DIR` - Base directory for task files and attachments (default: `/tmp/claude-intern-tasks`)
+
+**Note**: JIRA PR status transitions are configured per-project in `settings.json`, not as environment variables.
 
 ### CLI Options and Features
 
+- **Initialization**: `claude-intern init` to create project-specific configuration
+  - Creates `.claude-intern` folder with `.env` and `.env.sample`
+  - Provides guided setup for new projects
+  - Automatically adds `.claude-intern/.env` to `.gitignore` for security
 - **Batch Processing**: Process multiple tasks sequentially
   - Multiple task keys: `claude-intern PROJ-123 PROJ-124 PROJ-125`
   - JQL queries: `--jql "project = PROJ AND status = 'To Do'"`
@@ -239,6 +272,15 @@ npm install -g claude-intern
 npx claude-intern PROJ-123
 ```
 
+### Project Setup
+```bash
+# Initialize project-specific configuration
+claude-intern init
+
+# This creates .claude-intern/.env (automatically added to .gitignore)
+# Edit with your JIRA credentials and start using claude-intern
+```
+
 ### Single Task Processing
 ```bash
 # Global installation
@@ -312,4 +354,4 @@ claude-intern --jql "project = PROJ AND status = 'To Do'" --skip-jira-comments
 claude-intern PROJ-123 --skip-jira-comments --skip-clarity-check
 ```
 
-The tool will use JIRA credentials from `.env` files and execute Claude in the current working directory, making it flexible for use across multiple projects.
+The tool will use JIRA credentials from `.env` files (prioritizing `.claude-intern/.env` for project-specific configuration) and execute Claude in the current working directory, making it flexible for use across multiple projects.

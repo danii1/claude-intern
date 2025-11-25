@@ -9,6 +9,7 @@ import { ClaudeFormatter } from "./lib/claude-formatter";
 import { JiraClient } from "./lib/jira-client";
 import { PRManager } from "./lib/pr-client";
 import { Utils } from "./lib/utils";
+import type { ProjectSettings } from "./types/settings";
 
 interface ProgramOptions {
   claude: boolean;
@@ -38,6 +39,203 @@ interface ClarityAssessment {
   summary: string;
 }
 
+// Initialize project-specific configuration folder
+async function initializeProject(): Promise<void> {
+  const configDir = resolve(process.cwd(), ".claude-intern");
+  const envFile = join(configDir, ".env");
+  const envSampleFile = join(configDir, ".env.sample");
+
+  console.log("🚀 Initializing Claude Intern for this project...");
+
+  // Check if .claude-intern folder already exists
+  if (existsSync(configDir)) {
+    console.log(`\n⚠️  Configuration folder already exists: ${configDir}`);
+
+    // Check if .env file exists
+    if (existsSync(envFile)) {
+      console.log("✅ .env file found");
+    } else {
+      console.log("⚠️  .env file not found");
+    }
+
+    console.log("\n💡 To reconfigure, either:");
+    console.log(`   1. Delete the folder: rm -rf ${configDir}`);
+    console.log("   2. Or edit the files directly");
+    return;
+  }
+
+  // Create .claude-intern folder
+  try {
+    mkdirSync(configDir, { recursive: true });
+    console.log(`✅ Created configuration folder: ${configDir}`);
+  } catch (error) {
+    console.error(`❌ Failed to create configuration folder: ${error}`);
+    process.exit(1);
+  }
+
+  // Create .env.sample file with template
+  const envSampleContent = `# Claude Intern Environment Configuration
+# Copy this file to .env and update with your actual values
+
+# JIRA Configuration
+# Your JIRA instance URL (without trailing slash)
+JIRA_BASE_URL=https://your-company.atlassian.net
+
+# Your JIRA email address
+JIRA_EMAIL=your-email@company.com
+
+# Your JIRA API token
+# Create one at: https://id.atlassian.com/manage-profile/security/api-tokens
+# Option 1: Just the API token (will be combined with email above)
+JIRA_API_TOKEN=your-api-token-here
+# Option 2: If your token already includes email, use format: email@company.com:api-token
+# JIRA_API_TOKEN=your-email@company.com:your-api-token-here
+
+# Optional: Claude CLI Configuration
+# Path to Claude CLI executable (defaults to 'claude' if not specified)
+CLAUDE_CLI_PATH=claude
+
+# Note: Claude will be run with --dangerously-skip-permissions and --max-turns 10
+# This allows for elevated permissions and extended conversations for complex tasks
+
+# Optional: Output Directory Configuration
+# Base directory for saving task-related files (defaults to /tmp/claude-intern-tasks)
+# CLAUDE_INTERN_OUTPUT_DIR=/tmp/claude-intern-tasks
+
+# Optional: Enable verbose logging by default
+# VERBOSE=true
+
+# Optional: Pull Request Integration
+# GitHub personal access token for creating pull requests
+# Create one at: https://github.com/settings/tokens (needs 'repo' scope)
+# GITHUB_TOKEN=your-github-token-here
+
+# Bitbucket app password for creating pull requests
+# Create one at: https://bitbucket.org/account/settings/app-passwords/
+# Needs 'Repositories: Write' permission
+# BITBUCKET_TOKEN=your-bitbucket-app-password-here
+
+# Note: Bitbucket workspace is automatically detected from your git remote URL
+`;
+
+  try {
+    writeFileSync(envSampleFile, envSampleContent, "utf8");
+    console.log(`✅ Created template file: ${envSampleFile}`);
+  } catch (error) {
+    console.error(`❌ Failed to create .env.sample: ${error}`);
+    process.exit(1);
+  }
+
+  // Create empty .env file for user to fill in
+  try {
+    writeFileSync(envFile, envSampleContent, "utf8");
+    console.log(`✅ Created configuration file: ${envFile}`);
+  } catch (error) {
+    console.error(`❌ Failed to create .env file: ${error}`);
+    process.exit(1);
+  }
+
+  // Create settings.json for per-project configuration
+  const settingsFile = join(configDir, "settings.json");
+  const settingsContent = {
+    projects: {
+      "PROJECT-KEY": {
+        prStatus: "In Review"
+      }
+    }
+  };
+
+  const settingsJsonString = JSON.stringify(settingsContent, null, 2);
+
+  try {
+    writeFileSync(settingsFile, settingsJsonString, "utf8");
+    console.log(`✅ Created settings file: ${settingsFile}`);
+  } catch (error) {
+    console.error(`❌ Failed to create settings.json: ${error}`);
+    process.exit(1);
+  }
+
+  // Update .gitignore to exclude .claude-intern/.env
+  const gitignorePath = join(process.cwd(), ".gitignore");
+  const gitignoreEntries = [".claude-intern/.env", ".claude-intern/.env.local"];
+
+  try {
+    let gitignoreContent = "";
+    let gitignoreExists = false;
+
+    // Read existing .gitignore if it exists
+    if (existsSync(gitignorePath)) {
+      gitignoreContent = readFileSync(gitignorePath, "utf8");
+      gitignoreExists = true;
+    }
+
+    // Check if entries already exist
+    const entriesToAdd = gitignoreEntries.filter(
+      (entry) => !gitignoreContent.includes(entry)
+    );
+
+    if (entriesToAdd.length > 0) {
+      // Add entries to .gitignore
+      const newEntries = [
+        "",
+        "# Claude Intern - Keep credentials secure",
+        ...entriesToAdd,
+      ].join("\n");
+
+      // Ensure there's a newline at the end of existing content if it exists
+      if (gitignoreContent && !gitignoreContent.endsWith("\n")) {
+        gitignoreContent += "\n";
+      }
+
+      writeFileSync(gitignorePath, gitignoreContent + newEntries + "\n", "utf8");
+      console.log(
+        `✅ Updated .gitignore to exclude ${entriesToAdd.join(", ")}`
+      );
+    } else if (gitignoreExists) {
+      console.log("✅ .gitignore already excludes .claude-intern/.env");
+    }
+  } catch (error) {
+    console.warn(
+      `⚠️  Could not update .gitignore automatically: ${error}`
+    );
+    console.log(
+      "   Please manually add '.claude-intern/.env' to your .gitignore"
+    );
+  }
+
+  console.log("\n🎉 Project initialized successfully!");
+  console.log("\n📝 Next steps:");
+  console.log(`   1. Edit ${envFile}`);
+  console.log("      - Add your JIRA credentials");
+  console.log(`   2. Edit ${settingsFile} (optional)`);
+  console.log("      - Configure per-project PR status transitions");
+  console.log("   3. Run 'claude-intern <TASK-KEY>' to start working on tasks");
+}
+
+// Load project settings from .claude-intern/settings.json
+function loadProjectSettings(): ProjectSettings | null {
+  const settingsPath = resolve(process.cwd(), ".claude-intern", "settings.json");
+
+  if (!existsSync(settingsPath)) {
+    return null;
+  }
+
+  try {
+    const settingsContent = readFileSync(settingsPath, "utf8");
+    const settings = JSON.parse(settingsContent) as ProjectSettings;
+    return settings;
+  } catch (error) {
+    console.warn(`⚠️  Failed to parse settings.json: ${error}`);
+    return null;
+  }
+}
+
+// Get PR status for a specific project key
+function getPrStatusForProject(projectKey: string, settings: ProjectSettings | null): string | undefined {
+  // Check settings.json for project-specific configuration
+  return settings?.projects?.[projectKey]?.prStatus;
+}
+
 // Load environment variables from multiple possible locations
 function loadEnvironment(envFile?: string): void {
   // If user specified a custom env file, use that first
@@ -52,8 +250,9 @@ function loadEnvironment(envFile?: string): void {
     process.exit(1);
   }
 
-  // Otherwise, check standard locations
+  // Otherwise, check standard locations with priority order
   const envPaths = [
+    resolve(process.cwd(), ".claude-intern", ".env"), // Project-specific config (highest priority)
     resolve(process.cwd(), ".env"), // Current working directory
     resolve(process.env.HOME || "~", ".env"), // Home directory
     resolve(__dirname, "..", ".env"), // Claude-intern directory (for development)
@@ -77,8 +276,17 @@ function loadEnvironment(envFile?: string): void {
   }
 }
 
-// Load environment variables early (before CLI parsing)
-loadEnvironment();
+// Check if running init command before parsing
+// This needs to happen early to avoid Commander treating "init" as a task key
+if (process.argv[2] === "init") {
+  (async () => {
+    await initializeProject();
+    process.exit(0);
+  })();
+} else {
+  // Load environment variables early (before CLI parsing)
+  loadEnvironment();
+}
 
 // Function to find executable in PATH (cross-platform)
 function findInPath(command: string): string | null {
@@ -148,11 +356,8 @@ program
   .description(
     "Your AI intern for automatically implementing JIRA tasks using Claude. Supports single tasks, multiple tasks, or JQL queries for batch processing."
   )
-  .version("1.0.1")
-  .argument(
-    "[task-keys...]",
-    "JIRA task key(s) (e.g., PROJ-123) or use --jql for query-based selection"
-  )
+  .version("1.1.0")
+  .argument("[task-keys...]", "JIRA task key(s) (e.g., PROJ-123) or use --jql for query-based selection")
   .option(
     "--jql <query>",
     "JQL query to fetch multiple issues (e.g., \"project = PROJ AND status = 'To Do'\")"
@@ -186,8 +391,9 @@ program
     "--hook-retries <number>",
     "Number of retry attempts for git hook failures",
     "10"
-  )
-  .parse();
+  );
+
+program.parse();
 
 const options = program.opts<ProgramOptions>();
 const taskKeys = program.args;
@@ -199,6 +405,7 @@ if (options.envFile) {
   console.log("⚠️  No .env file found in standard locations");
   console.log("   Checked:");
   const envPaths = [
+    resolve(process.cwd(), ".claude-intern", ".env"),
     resolve(process.cwd(), ".env"),
     resolve(process.env.HOME || "~", ".env"),
     resolve(__dirname, "..", ".env"),
@@ -223,13 +430,14 @@ function validateEnvironment(): void {
     console.error(
       "\nPlease ensure you have a .env file in one of these locations:"
     );
+    console.error(`   - Project-specific: ${resolve(process.cwd(), ".claude-intern", ".env")}`);
     console.error(`   - Current directory: ${resolve(process.cwd(), ".env")}`);
     console.error(
       `   - Home directory: ${resolve(process.env.HOME || "~", ".env")}`
     );
     console.error("\nOr specify a custom .env file with --env-file <path>");
     console.error("Or set these environment variables in your shell.");
-    console.error("See .env.sample for reference.");
+    console.error("\n💡 Quick start: Run 'claude-intern init' to create project-specific configuration");
     process.exit(1);
   }
 }
@@ -1479,6 +1687,9 @@ async function runClaude(
       return;
     }
 
+    // Load project settings
+    const projectSettings = loadProjectSettings();
+
     // Read the task content
     const taskContent = readFileSync(taskFile, "utf8");
 
@@ -1798,31 +2009,30 @@ async function runClaude(
                         );
 
                         // Transition JIRA status if configured
-                        const prStatus = process.env.JIRA_PR_STATUS;
-                        if (
-                          prStatus &&
-                          prStatus.trim() &&
-                          taskKey &&
-                          jiraClient &&
-                          !skipJiraComments
-                        ) {
-                          try {
-                            console.log(
-                              "\n🔄 Transitioning JIRA status after PR creation..."
-                            );
-                            await jiraClient.transitionIssue(
-                              taskKey,
-                              prStatus.trim()
-                            );
-                          } catch (statusError) {
-                            console.warn(
-                              `⚠️  Failed to transition JIRA status: ${
-                                (statusError as Error).message
-                              }`
-                            );
-                            console.log(
-                              "   PR was created successfully, but status transition failed"
-                            );
+                        if (taskKey && jiraClient && !skipJiraComments) {
+                          // Extract project key from task key (e.g., "PROJ-123" -> "PROJ")
+                          const projectKey = taskKey.split('-')[0];
+                          const prStatus = getPrStatusForProject(projectKey, projectSettings);
+
+                          if (prStatus && prStatus.trim()) {
+                            try {
+                              console.log(
+                                "\n🔄 Transitioning JIRA status after PR creation..."
+                              );
+                              await jiraClient.transitionIssue(
+                                taskKey,
+                                prStatus.trim()
+                              );
+                            } catch (statusError) {
+                              console.warn(
+                                `⚠️  Failed to transition JIRA status: ${
+                                  (statusError as Error).message
+                                }`
+                              );
+                              console.log(
+                                "   PR was created successfully, but status transition failed"
+                              );
+                            }
                           }
                         } else if (skipJiraComments) {
                           console.log(
@@ -1911,9 +2121,19 @@ process.on("unhandledRejection", (error: Error) => {
   process.exit(1);
 });
 
-// Run the main function
+// Run the main function (only if not running a subcommand)
 if (require.main === module) {
-  main();
+  // Check if a subcommand was run (like 'init')
+  // Commander.js will have the command in process.argv[2]
+  const command = process.argv[2];
+
+  // If it's a recognized subcommand, don't run main()
+  if (command === 'init') {
+    // Subcommand was handled, don't run main
+  } else {
+    // Run main for task processing
+    main();
+  }
 }
 
 export { main, JiraClient, ClaudeFormatter };

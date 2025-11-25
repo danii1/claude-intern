@@ -85,3 +85,7 @@ jspm_packages/
 *.swo 
 
 dist/
+
+# Claude Intern - Keep credentials secure
+.claude-intern/.env
+.claude-intern/.env.local

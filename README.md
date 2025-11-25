@@ -42,27 +42,49 @@ bun run install-global
 
 ## Configuration
 
+### Quick Setup with Init Command
+
+The easiest way to set up claude-intern for your project is using the `init` command:
+
+```bash
+# Initialize project-specific configuration
+claude-intern init
+```
+
+This creates a `.claude-intern` folder in your current project with:
+- `.env` - Your project-specific configuration file with JIRA credentials
+- `.env.sample` - Template with all configuration options
+- `settings.json` - Per-project settings (PR status transitions, etc.)
+
+**Automatic .gitignore Protection:** The `init` command automatically adds `.claude-intern/.env` to your `.gitignore` file (or creates one if it doesn't exist) to prevent accidentally committing credentials to version control.
+
+After running `init`:
+1. Edit `.claude-intern/.env` with your JIRA credentials
+2. (Optional) Edit `.claude-intern/settings.json` to configure per-project PR status transitions
+
 ### Environment File Setup
 
 The tool searches for `.env` files in the following order:
 
 1. **Custom path** (if specified with `--env-file`)
-2. **Current working directory** (where you run the command)
-3. **User home directory** (`~/.env`)
-4. **Tool installation directory**
+2. **Project-specific** (`.claude-intern/.env` - recommended)
+3. **Current working directory** (`.env`)
+4. **User home directory** (`~/.env`)
+5. **Tool installation directory**
 
-For global installation, it's recommended to either:
-- Place `.env` in your project directory (most common)
-- Place `.env` in your home directory (`~/.env`) for global access
+Configuration options:
 
 ```bash
 # Option 1: Project-specific (recommended)
+claude-intern init  # Creates .claude-intern/.env
+
+# Option 2: Current directory
 cp .env.sample .env
 
-# Option 2: Global configuration
+# Option 3: Global configuration
 cp .env.sample ~/.env
 
-# Option 3: Custom location
+# Option 4: Custom location
 claude-intern PROJ-123 --env-file /path/to/custom.env
 ```
 
@@ -77,9 +99,34 @@ Update your `.env` file with your JIRA details:
    Optional PR integration:
    - `GITHUB_TOKEN`: GitHub personal access token for creating pull requests
    - `BITBUCKET_TOKEN`: Bitbucket app password for creating pull requests
-   - `JIRA_PR_STATUS`: Auto-transition JIRA status after PR creation (e.g., "In Review")
 
    The `.env.sample` file includes helpful comments and optional configuration options.
+
+   **Note:** JIRA PR status transitions are now configured per-project in `settings.json` (see below).
+
+### Per-Project Settings (settings.json)
+
+The `.claude-intern/settings.json` file allows you to configure project-specific behavior:
+
+```json
+{
+  "projects": {
+    "PROJ": {
+      "prStatus": "In Review"
+    },
+    "ABC": {
+      "prStatus": "Code Review"
+    }
+  }
+}
+```
+
+**Configuration options:**
+- `prStatus`: JIRA status to transition to after PR creation for a specific project
+  - Each project key can have its own status workflow
+  - If not configured, no status transition will occur
+
+**Example:** If you work with multiple JIRA projects that have different workflows (e.g., "PROJ" uses "In Review" but "ABC" uses "Code Review"), configure each project's status in `settings.json`.
 
 ## Usage
 
@@ -237,13 +284,11 @@ claude-intern --jql "sprint in openSprints() AND assignee = currentUser()" --max
 ## Quick Start
 
 1. Install globally: `npm install -g claude-intern`
-2. Get the sample environment file:
-   ```bash
-   # Download .env.sample from the repository
-   curl -o .env https://raw.githubusercontent.com/danii1/claude-intern/master/.env.sample
-   ```
-3. Configure your JIRA credentials in `.env` (or `~/.env` for global access)
+2. Initialize your project: `claude-intern init`
+3. Configure your JIRA credentials in `.claude-intern/.env`
 4. Run from any directory: `claude-intern PROJ-123`
+
+**Alternative:** For global configuration across all projects, place `.env` in your home directory (`~/.env`)
 
 See [USAGE.md](./USAGE.md) for detailed usage scenarios and troubleshooting.  
 See [GLOBAL_USAGE.md](./GLOBAL_USAGE.md) for quick reference on global installation.  
