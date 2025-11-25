@@ -357,7 +357,7 @@ program
   .description(
     "Your AI intern for automatically implementing JIRA tasks using Claude. Supports single tasks, multiple tasks, or JQL queries for batch processing."
   )
-  .version("1.1.1")
+  .version("1.1.2")
   .argument("[task-keys...]", "JIRA task key(s) (e.g., PROJ-123) or use --jql for query-based selection")
   .option(
     "--jql <query>",
