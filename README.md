@@ -240,6 +240,31 @@ claude-intern --jql "\"Epic Link\" = PROJ-100" --create-pr
 claude-intern --jql "sprint in openSprints() AND assignee = currentUser()" --max-turns 500
 ```
 
+### Automated Processing with Cron
+
+You can set up automated task processing using cron jobs. This is useful for continuously picking up new tasks labeled for the intern to work on:
+
+```bash
+# Example: Process tasks labeled "Intern" in open sprints every 10 minutes
+# Add to crontab (run: crontab -e)
+*/10 * * * * cd /path/to/your/project && claude-intern --jql 'statusCategory = "To Do" AND sprint in openSprints() AND labels IN (Intern) ORDER BY created DESC' --max-turns 500 --create-pr --pr-target-branch master >> /tmp/claude-intern-cron.log 2>&1
+
+# Example: Process assigned tasks every hour
+0 * * * * cd /path/to/your/project && claude-intern --jql 'assignee = currentUser() AND status = "To Do" AND labels IN (AutoImpl)' --create-pr >> /tmp/claude-intern-cron.log 2>&1
+
+# Example: Process high-priority bugs twice daily
+0 9,17 * * * cd /path/to/your/project && claude-intern --jql 'type = Bug AND priority = High AND status = "To Do" AND labels IN (Intern)' --max-turns 300 --create-pr >> /tmp/claude-intern-cron.log 2>&1
+```
+
+**Important notes for cron setup:**
+- Always change to your project directory (`cd /path/to/your/project`) to ensure the correct `.claude-intern/.env` is loaded
+- Use absolute paths or ensure PATH includes `claude-intern` and `claude` binaries
+- Redirect output to a log file for monitoring (`>> /tmp/claude-intern-cron.log 2>&1`)
+- Use the `ORDER BY created DESC` clause to process newest tasks first
+- Consider using labels (e.g., `labels = "Intern"`) to mark tasks for automated processing
+- Test your JQL query manually before adding to cron to ensure it returns the expected tasks
+- Monitor the log file regularly to ensure the cron job is running successfully
+
 ## What it does
 
 1. Fetches the JIRA task details including:
