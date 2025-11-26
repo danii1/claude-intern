@@ -148,8 +148,15 @@ export class Utils {
    * Execute a git command and return the result
    */
   static async executeGitCommand(
-    args: string[]
+    args: string[],
+    options?: { verbose?: boolean }
   ): Promise<{ success: boolean; output: string; error?: string }> {
+    const verbose = options?.verbose ?? false;
+
+    if (verbose) {
+      console.log(`🔧 Executing: git ${args.join(" ")}`);
+    }
+
     return new Promise((resolve) => {
       const git = spawn("git", args, { stdio: ["pipe", "pipe", "pipe"] });
 
@@ -157,19 +164,43 @@ export class Utils {
       let error = "";
 
       git.stdout.on("data", (data) => {
-        output += data.toString();
+        const text = data.toString();
+        output += text;
+        if (verbose) {
+          process.stdout.write(text);
+        }
       });
 
       git.stderr.on("data", (data) => {
-        error += data.toString();
+        const text = data.toString();
+        error += text;
+        if (verbose) {
+          process.stderr.write(text);
+        }
       });
 
       git.on("close", (code) => {
-        resolve({
+        const result = {
           success: code === 0,
           output: output.trim(),
           error: error.trim(),
-        });
+        };
+
+        if (verbose) {
+          if (!result.success) {
+            console.error(`❌ Git command failed (exit code ${code})`);
+            if (result.error) {
+              console.error(`   Error: ${result.error}`);
+            }
+            if (result.output) {
+              console.error(`   Output: ${result.output}`);
+            }
+          } else {
+            console.log(`✅ Git command succeeded`);
+          }
+        }
+
+        resolve(result);
       });
     });
   }
@@ -203,8 +234,11 @@ export class Utils {
    */
   static async commitChanges(
     taskKey: string,
-    taskSummary: string
+    taskSummary: string,
+    options?: { verbose?: boolean }
   ): Promise<{ success: boolean; message: string; hookError?: string }> {
+    const verbose = options?.verbose ?? false;
+
     try {
       // Check if we're in a git repository
       if (!(await Utils.isGitRepository())) {
@@ -223,7 +257,7 @@ export class Utils {
       }
 
       // Add all changes
-      const addResult = await Utils.executeGitCommand(["add", "."]);
+      const addResult = await Utils.executeGitCommand(["add", "."], { verbose });
       if (!addResult.success) {
         return {
           success: false,
@@ -239,7 +273,7 @@ export class Utils {
         "commit",
         "-m",
         commitMessage,
-      ]);
+      ], { verbose });
       if (commitResult.success) {
         return {
           success: true,
@@ -317,11 +351,13 @@ export class Utils {
   /**
    * Push current branch to remote repository
    */
-  static async pushCurrentBranch(): Promise<{
+  static async pushCurrentBranch(options?: { verbose?: boolean }): Promise<{
     success: boolean;
     message: string;
     hookError?: string;
   }> {
+    const verbose = options?.verbose ?? false;
+
     try {
       // Get current branch name
       const currentBranch = await Utils.getCurrentBranch();
@@ -332,13 +368,17 @@ export class Utils {
         };
       }
 
+      if (verbose) {
+        console.log(`📤 Pushing branch '${currentBranch}' to remote...`);
+      }
+
       // Check if remote branch exists
       const remoteBranchExists = await Utils.executeGitCommand([
         "ls-remote",
         "--heads",
         "origin",
         currentBranch,
-      ]);
+      ], { verbose });
 
       let pushResult;
       if (remoteBranchExists.success && remoteBranchExists.output.trim()) {
@@ -347,7 +387,7 @@ export class Utils {
           "push",
           "origin",
           currentBranch,
-        ]);
+        ], { verbose });
         if (pushResult.success) {
           return {
             success: true,
@@ -361,7 +401,7 @@ export class Utils {
           "-u",
           "origin",
           currentBranch,
-        ]);
+        ], { verbose });
         if (pushResult.success) {
           return {
             success: true,

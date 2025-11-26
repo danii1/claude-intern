@@ -1881,7 +1881,9 @@ async function runClaude(
 
             while (attempt <= hookRetries) {
               attempt++;
-              const commitResult = await Utils.commitChanges(taskKey, taskSummary);
+              const commitResult = await Utils.commitChanges(taskKey, taskSummary, {
+                verbose: options.verbose,
+              });
 
               if (commitResult.success) {
                 console.log(`✅ ${commitResult.message}`);
@@ -1948,7 +1950,9 @@ async function runClaude(
 
                   while (attempt <= hookRetries) {
                     attempt++;
-                    const pushResult = await Utils.pushCurrentBranch();
+                    const pushResult = await Utils.pushCurrentBranch({
+                      verbose: options.verbose,
+                    });
 
                     if (pushResult.success) {
                       console.log(`✅ ${pushResult.message}`);
