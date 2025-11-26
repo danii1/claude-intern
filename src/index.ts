@@ -1800,7 +1800,7 @@ async function runClaude(
 
       if (maxTurnsReached) {
         console.log(
-          "❌ Claude reached maximum turns limit without completing the task"
+          "⚠️  Claude reached maximum turns limit without completing the task"
         );
         console.log(
           "   The task may be too complex or require more turns to complete"
@@ -1811,11 +1811,31 @@ async function runClaude(
         console.log(
           "   No JIRA comment will be posted as the implementation is incomplete"
         );
-        reject(
-          new Error(
-            "Claude reached maximum turns limit. The task may be too complex or require more turns to complete. Consider breaking it into smaller tasks or increasing the max-turns limit."
-          )
-        );
+
+        // Save incomplete implementation for analysis
+        if (taskKey && stdoutOutput.trim()) {
+          try {
+            const baseOutputDir =
+              process.env.CLAUDE_INTERN_OUTPUT_DIR || "/tmp/claude-intern-tasks";
+            const taskDir = join(baseOutputDir, taskKey.toLowerCase());
+            const summaryFile = join(
+              taskDir,
+              "implementation-summary-incomplete.md"
+            );
+
+            writeFileSync(summaryFile, stdoutOutput, "utf8");
+            console.log(`\n💾 Saved incomplete implementation to: ${summaryFile}`);
+          } catch (saveError) {
+            console.warn(
+              `⚠️  Failed to save implementation summary: ${saveError}`
+            );
+          }
+        }
+
+        console.log("\n⏭️  Skipping commit and moving to next task (if any)...");
+
+        // Resolve instead of reject to allow batch processing to continue
+        resolve();
         return;
       }
 
@@ -1867,6 +1887,12 @@ async function runClaude(
             "   Output saved for analysis but no JIRA comment will be posted"
           );
           console.log("   Check the output above for specific issues");
+          console.log("\n⏭️  Skipping commit and moving to next task (if any)...");
+
+          // Don't commit or continue processing when implementation is incomplete
+          // Just resolve to allow batch processing to continue
+          resolve();
+          return;
         } else {
           console.log("✅ Claude execution completed successfully");
         }
