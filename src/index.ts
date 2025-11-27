@@ -1633,7 +1633,7 @@ The git ${hookType} operation has failed, likely due to pre-${hookType} hooks ch
 - Do not modify unrelated code
 - Ensure all tests pass if the hook runs tests
 - Follow the project's coding standards and conventions
-${hookType === "push" ? "- Make sure to amend the commit so the fixes are included in the push" : ""}
+${hookType === "push" ? "- Make sure to amend the commit (git commit --amend --no-edit) so the fixes are included in the push" : ""}
 `;
 
     let stdoutOutput = "";
