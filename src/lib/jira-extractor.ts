@@ -399,4 +399,36 @@ export class JiraExtractor {
       })) || []
     };
   }
+
+  /**
+   * Extract plain text from Atlassian Document Format
+   */
+  static extractTextFromADF(doc: AtlassianDocument | string | undefined): string {
+    if (!doc) {
+      return "";
+    }
+
+    if (typeof doc === "string") {
+      return doc;
+    }
+
+    // Recursively extract text content from ADF nodes
+    const extractText = (nodes: any[]): string => {
+      if (!nodes) return "";
+
+      return nodes
+        .map((node) => {
+          if (node.type === "text") {
+            return node.text || "";
+          }
+          if (node.content) {
+            return extractText(node.content);
+          }
+          return "";
+        })
+        .join("");
+    };
+
+    return extractText(doc.content || []);
+  }
 }

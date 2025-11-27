@@ -476,6 +476,35 @@ async function processSingleTask(
     }
     const issue = await jiraClient.getIssue(taskKey);
 
+    // Check if incomplete implementation comment exists with unchanged description
+    // If so, skip processing to avoid redundant work
+    if (options.claude && !options.skipJiraComments) {
+      console.log("🔍 Checking for previous incomplete implementation attempts...");
+
+      // Import JiraExtractor to properly extract text from ADF
+      const { JiraExtractor } = await import("./lib/jira-extractor");
+      const descriptionText = JiraExtractor.extractTextFromADF(issue.fields?.description);
+
+      const hasDuplicate = await jiraClient.hasIncompleteImplementationComment(
+        taskKey,
+        descriptionText
+      );
+
+      if (hasDuplicate) {
+        console.log(`\n⏭️  Skipping ${taskKey} - incomplete implementation comment already exists`);
+        console.log("   Task description hasn't changed since last incomplete attempt");
+        console.log("   Please update the task description with more details before retrying");
+        console.log();
+
+        // For batch processing, just return to continue with next task
+        // For single task processing, this will end execution
+        if (totalTasks > 1) {
+          return;
+        }
+        process.exit(0);
+      }
+    }
+
     if (options.verbose) {
       console.log("💬 Fetching comments...");
     }
@@ -1814,9 +1843,6 @@ async function runClaude(
         console.log(
           "   Consider breaking it into smaller tasks or increasing the max-turns limit"
         );
-        console.log(
-          "   No JIRA comment will be posted as the implementation is incomplete"
-        );
 
         // Save incomplete implementation for analysis
         if (taskKey && stdoutOutput.trim()) {
@@ -1831,6 +1857,27 @@ async function runClaude(
 
             writeFileSync(summaryFile, stdoutOutput, "utf8");
             console.log(`\n💾 Saved incomplete implementation to: ${summaryFile}`);
+
+            // Post incomplete implementation comment to JIRA (no duplicate check here
+            // since we already skip tasks with existing incomplete comments)
+            if (jiraClient && !skipJiraComments && issue) {
+              try {
+                // Extract description text for saving
+                const { JiraExtractor } = require("./lib/jira-extractor");
+                const descriptionText = JiraExtractor.extractTextFromADF(issue.fields?.description);
+
+                await jiraClient.postIncompleteImplementationComment(
+                  taskKey,
+                  stdoutOutput,
+                  taskSummary,
+                  descriptionText
+                );
+              } catch (commentError) {
+                console.warn(
+                  `⚠️  Failed to post incomplete implementation comment to JIRA: ${commentError}`
+                );
+              }
+            }
           } catch (saveError) {
             console.warn(
               `⚠️  Failed to save implementation summary: ${saveError}`
@@ -1889,11 +1936,29 @@ async function runClaude(
           console.log(
             "⚠️  Claude execution completed but appears to be incomplete or failed"
           );
-          console.log(
-            "   Output saved for analysis but no JIRA comment will be posted"
-          );
           console.log("   Check the output above for specific issues");
           console.log("\n⏭️  Skipping commit and moving to next task (if any)...");
+
+          // Post incomplete implementation comment to JIRA (no duplicate check here
+          // since we already skip tasks with existing incomplete comments)
+          if (jiraClient && !skipJiraComments && taskKey && stdoutOutput.trim() && issue) {
+            try {
+              // Extract description text for saving
+              const { JiraExtractor } = require("./lib/jira-extractor");
+              const descriptionText = JiraExtractor.extractTextFromADF(issue.fields?.description);
+
+              await jiraClient.postIncompleteImplementationComment(
+                taskKey,
+                stdoutOutput,
+                taskSummary,
+                descriptionText
+              );
+            } catch (commentError) {
+              console.warn(
+                `⚠️  Failed to post incomplete implementation comment to JIRA: ${commentError}`
+              );
+            }
+          }
 
           // Don't commit or continue processing when implementation is incomplete
           // Just resolve to allow batch processing to continue

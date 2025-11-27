@@ -577,6 +577,118 @@ export class JiraClient {
     }
   }
 
+  /**
+   * Post a rich text incomplete implementation comment to a JIRA issue
+   * Also saves the task description to disk for future duplicate detection
+   */
+  async postIncompleteImplementationComment(
+    issueKey: string,
+    claudeOutput: string,
+    taskSummary?: string,
+    taskDescription?: string
+  ): Promise<void> {
+    try {
+      console.log(`💬 Posting incomplete implementation comment to issue ${issueKey}...`);
+
+      const content = JiraFormatter.createIncompleteImplementationCommentADF(
+        claudeOutput,
+        taskSummary
+      );
+
+      const commentBody = {
+        body: {
+          type: "doc",
+          version: 1,
+          content: content,
+        },
+      };
+
+      await this.jiraApiCall(
+        "POST",
+        `/rest/api/3/issue/${issueKey}/comment`,
+        commentBody
+      );
+      console.log(
+        `✅ Successfully posted incomplete implementation comment to ${issueKey}`
+      );
+
+      // Save the task description to disk for duplicate detection
+      if (taskDescription) {
+        try {
+          const baseOutputDir =
+            process.env.CLAUDE_INTERN_OUTPUT_DIR || "/tmp/claude-intern-tasks";
+          const taskDir = path.join(baseOutputDir, issueKey.toLowerCase());
+          const descriptionFile = path.join(taskDir, "incomplete-task-description.txt");
+
+          mkdirSync(taskDir, { recursive: true });
+          writeFileSync(descriptionFile, taskDescription, "utf8");
+        } catch (saveError) {
+          console.warn(
+            `⚠️  Failed to save task description for duplicate detection: ${saveError}`
+          );
+        }
+      }
+    } catch (error) {
+      console.warn(
+        `Failed to post incomplete implementation comment to ${issueKey}: ${error}`
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Check if an incomplete implementation comment already exists for the current task description
+   * This prevents duplicate comments when retrying the same task without changes
+   */
+  async hasIncompleteImplementationComment(
+    issueKey: string,
+    currentDescription: string
+  ): Promise<boolean> {
+    try {
+      // First check if we have a saved description from a previous incomplete attempt
+      const baseOutputDir =
+        process.env.CLAUDE_INTERN_OUTPUT_DIR || "/tmp/claude-intern-tasks";
+      const taskDir = path.join(baseOutputDir, issueKey.toLowerCase());
+      const descriptionFile = path.join(taskDir, "incomplete-task-description.txt");
+
+      // Check if the description file exists
+      const { existsSync, readFileSync } = require("fs");
+      if (!existsSync(descriptionFile)) {
+        // No previous incomplete attempt
+        return false;
+      }
+
+      // Read the saved description
+      const savedDescription = readFileSync(descriptionFile, "utf8");
+
+      // Compare saved description to current description
+      // If they match, we have a duplicate (description hasn't changed)
+      if (savedDescription === currentDescription) {
+        // Also verify that an incomplete comment actually exists in JIRA
+        const comments = await this.getIssueComments(issueKey);
+        const hasIncompleteComment = comments.some(comment => {
+          let commentText = "";
+          if (typeof comment.body === "string") {
+            commentText = comment.body;
+          } else if (comment.renderedBody) {
+            commentText = comment.renderedBody;
+          }
+          return commentText.includes("⚠️ Implementation Incomplete") ||
+                 commentText.includes("Implementation was incomplete");
+        });
+
+        return hasIncompleteComment;
+      }
+
+      // Description has changed, allow new attempt
+      return false;
+    } catch (error) {
+      console.warn(`Failed to check for duplicate comments: ${error}`);
+      // On error, allow the comment to be posted (fail open)
+      return false;
+    }
+  }
+
   formatIssueDetails(
     issue: JiraIssue,
     comments: JiraComment[],

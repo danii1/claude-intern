@@ -587,4 +587,159 @@ export class JiraFormatter {
 
     return content;
   }
+
+  /**
+   * Create ADF content for incomplete implementation comment
+   */
+  static createIncompleteImplementationCommentADF(claudeOutput: string, taskSummary?: string): any[] {
+    const content: any[] = [
+      // Header with warning emoji and title
+      {
+        type: 'heading',
+        attrs: { level: 3 },
+        content: [
+          {
+            type: 'emoji',
+            attrs: { shortName: ':warning:', id: '26a0-fe0f', text: '⚠️' }
+          },
+          {
+            type: 'text',
+            text: ' Implementation Incomplete'
+          }
+        ]
+      }
+    ];
+
+    // Add task summary if provided
+    if (taskSummary) {
+      content.push({
+        type: 'paragraph',
+        content: [
+          {
+            type: 'text',
+            text: 'Task: ',
+            marks: [{ type: 'strong' }]
+          },
+          {
+            type: 'text',
+            text: taskSummary
+          }
+        ]
+      });
+    }
+
+    // Add explanation
+    content.push({
+      type: 'paragraph',
+      content: [
+        {
+          type: 'text',
+          text: 'Claude was unable to complete the implementation. This may indicate:'
+        }
+      ]
+    });
+
+    // Add possible reasons as bullet list
+    content.push({
+      type: 'bulletList',
+      content: [
+        {
+          type: 'listItem',
+          content: [
+            {
+              type: 'paragraph',
+              content: [
+                {
+                  type: 'text',
+                  text: 'The task requirements need more clarity or detail'
+                }
+              ]
+            }
+          ]
+        },
+        {
+          type: 'listItem',
+          content: [
+            {
+              type: 'paragraph',
+              content: [
+                {
+                  type: 'text',
+                  text: 'Missing context or related information'
+                }
+              ]
+            }
+          ]
+        },
+        {
+          type: 'listItem',
+          content: [
+            {
+              type: 'paragraph',
+              content: [
+                {
+                  type: 'text',
+                  text: 'The task scope is too large and should be broken down'
+                }
+              ]
+            }
+          ]
+        },
+        {
+          type: 'listItem',
+          content: [
+            {
+              type: 'paragraph',
+              content: [
+                {
+                  type: 'text',
+                  text: 'Technical blockers or errors during execution'
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    });
+
+    // Add implementation attempt details header
+    content.push({
+      type: 'paragraph',
+      content: [
+        {
+          type: 'text',
+          text: 'Implementation Attempt Details:',
+          marks: [{ type: 'strong' }]
+        }
+      ]
+    });
+
+    // Add Claude's output formatted as ADF
+    const formattedOutput = JiraFormatter.formatClaudeOutputToADF(claudeOutput);
+    content.push(...formattedOutput);
+
+    // Add action panel
+    content.push({
+      type: 'panel',
+      attrs: { panelType: 'warning' },
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            {
+              type: 'text',
+              text: 'Action Required: ',
+              marks: [{ type: 'strong' }]
+            },
+            {
+              type: 'text',
+              text: 'Please review the output above, update the task description with more details if needed, and retry the implementation.'
+            }
+          ]
+        }
+      ]
+    });
+
+    return content;
+  }
 }
