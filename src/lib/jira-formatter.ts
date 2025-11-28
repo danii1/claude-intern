@@ -188,6 +188,34 @@ export class JiraFormatter {
         continue;
       }
 
+      // Handle markdown tables
+      if (trimmedLine.includes('|')) {
+        flushParagraph();
+        const tableLines: string[] = [];
+        let j = i;
+
+        // Collect all consecutive lines that look like table rows
+        while (j < lines.length && lines[j].trim().includes('|')) {
+          const tableLine = lines[j].trim();
+          // Skip separator lines (e.g., |---|---|)
+          if (!tableLine.match(/^\|[\s\-:|]+\|$/)) {
+            tableLines.push(tableLine);
+          }
+          j++;
+        }
+
+        // Parse table if we have at least a header row
+        if (tableLines.length > 0) {
+          const table = JiraFormatter.parseMarkdownTable(tableLines);
+          if (table) {
+            adfContent.push(table);
+          }
+        }
+
+        i = j - 1; // Adjust loop counter
+        continue;
+      }
+
       // Handle empty lines (paragraph breaks)
       if (trimmedLine === '') {
         flushParagraph();
@@ -286,6 +314,69 @@ export class JiraFormatter {
 
     flushText();
     return content.length > 0 ? content : [{ type: 'text', text: text }];
+  }
+
+  /**
+   * Parse markdown table into ADF table structure
+   */
+  static parseMarkdownTable(tableLines: string[]): any | null {
+    if (tableLines.length === 0) return null;
+
+    // Parse cells from a table row
+    const parseCells = (line: string): string[] => {
+      // Remove leading and trailing pipes
+      const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+      // Split by pipe and trim each cell
+      return trimmed.split('|').map(cell => cell.trim());
+    };
+
+    // First row is header
+    const headerCells = parseCells(tableLines[0]);
+    const numColumns = headerCells.length;
+
+    // Create header row
+    const headerRow = {
+      type: 'tableRow',
+      content: headerCells.map(cellText => ({
+        type: 'tableHeader',
+        attrs: {},
+        content: [{
+          type: 'paragraph',
+          content: JiraFormatter.parseTextWithFormatting(cellText)
+        }]
+      }))
+    };
+
+    // Create data rows
+    const dataRows = tableLines.slice(1).map(line => {
+      const cells = parseCells(line);
+      // Ensure we have the same number of columns
+      while (cells.length < numColumns) {
+        cells.push('');
+      }
+
+      return {
+        type: 'tableRow',
+        content: cells.slice(0, numColumns).map(cellText => ({
+          type: 'tableCell',
+          attrs: {},
+          content: [{
+            type: 'paragraph',
+            content: JiraFormatter.parseTextWithFormatting(cellText)
+          }]
+        }))
+      };
+    });
+
+    // Return complete table structure
+    return {
+      type: 'table',
+      attrs: {
+        isNumberColumnEnabled: false,
+        layout: 'default'
+      },
+      content: [headerRow, ...dataRows]
+    };
   }
 
   /**

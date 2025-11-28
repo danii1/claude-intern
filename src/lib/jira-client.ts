@@ -181,6 +181,36 @@ export class JiraClient {
     }
   }
 
+  /**
+   * Check if a comment is a Claude Intern automated comment
+   */
+  private isClaudeInternComment(comment: JiraComment): boolean {
+    // Check comment body for Claude Intern markers
+    let commentText = "";
+
+    // Extract text from different comment formats
+    // Priority: renderedBody > string body > ADF body
+    if (comment.renderedBody) {
+      // Rendered HTML body (most reliable for detection)
+      commentText = comment.renderedBody;
+    } else if (typeof comment.body === "string" && comment.body.length > 0) {
+      // Plain text body
+      commentText = comment.body;
+    } else if (comment.body && typeof comment.body === "object" && "content" in comment.body) {
+      // Extract from ADF format
+      commentText = JSON.stringify(comment.body);
+    }
+
+    // Check for Claude Intern comment markers (from jira-formatter.ts comment headers)
+    const claudeInternMarkers = [
+      "Implementation Completed by Claude",
+      "Automated Task Feasibility Assessment",
+      "Implementation Incomplete"
+    ];
+
+    return claudeInternMarkers.some(marker => commentText.includes(marker));
+  }
+
   async getIssueComments(issueKey: string): Promise<JiraComment[]> {
     try {
       const response = await this.jiraApiCall(
@@ -202,8 +232,21 @@ export class JiraClient {
         return [];
       }
 
-      // Return comments array or empty array if no comments
-      return response.comments || [];
+      // Filter out Claude Intern's own comments
+      const allComments = response.comments || [];
+      const filteredComments = allComments.filter(
+        (comment: JiraComment) => !this.isClaudeInternComment(comment)
+      );
+
+      const filteredCount = allComments.length - filteredComments.length;
+      if (filteredCount > 0) {
+        console.log(
+          `🔍 Filtered out ${filteredCount} Claude Intern comment(s) from ${issueKey}`
+        );
+      }
+
+      // Return filtered comments array
+      return filteredComments;
     } catch (error) {
       console.warn(`Failed to fetch comments for ${issueKey}: ${error}`);
       return [];
