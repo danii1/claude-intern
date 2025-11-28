@@ -72,18 +72,21 @@ The application follows a modular TypeScript architecture optimized for Bun runt
 ### Key Workflow
 
 1. **Fetch**: Retrieve JIRA task details including description, comments, linked resources, and related work items
-2. **Format**: Convert JIRA data into Claude-readable markdown format with comprehensive context
-3. **Branch**: Create feature branch named `feature/{task-key}`
-4. **Assess**: Run optional clarity check to validate task implementability
-5. **Implement**: Execute Claude Code with formatted task details and enhanced permissions
-6. **Save**: Save implementation summary to local file for analysis
+2. **Start Status**: Automatically transition task to "In Progress" status (if configured)
+3. **Format**: Convert JIRA data into Claude-readable markdown format with comprehensive context
+4. **Branch**: Create feature branch named `feature/{task-key}`
+5. **Assess**: Run optional clarity check to validate task implementability
+6. **Implement**: Execute Claude Code with formatted task details and enhanced permissions
+7. **Save**: Save implementation summary to local file for analysis
    - Successful: `{output-dir}/{task-key}/implementation-summary.md`
    - Incomplete: `{output-dir}/{task-key}/implementation-summary-incomplete.md`
-7. **Commit**: Automatically commit changes with descriptive message
-8. **Push**: Push feature branch to remote repository (when creating PRs)
-9. **PR Creation**: Optionally create pull requests on GitHub or Bitbucket
-10. **Status Transition**: Automatically transition JIRA task status after successful PR creation (if configured)
-11. **Report**: Post implementation summary back to JIRA task
+8. **Commit**: Automatically commit changes with descriptive message
+9. **Push**: Push feature branch to remote repository (when creating PRs)
+10. **PR Creation**: Optionally create pull requests on GitHub or Bitbucket
+11. **Status Transitions**: Automatically transition JIRA task status based on outcome (if configured)
+    - Successful PR creation → configured `prStatus` (e.g., "In Review")
+    - Implementation incomplete/failed → configured `todoStatus` (e.g., "To Do")
+12. **Report**: Post implementation summary back to JIRA task
 
 ### Batch Processing Workflow
 
@@ -141,13 +144,26 @@ The `settings.json` file in `.claude-intern/` allows configuring project-specifi
 ```json
 {
   "projects": {
-    "PROJ": { "prStatus": "In Review" },
-    "ABC": { "prStatus": "Code Review" }
+    "PROJ": {
+      "inProgressStatus": "In Progress",
+      "todoStatus": "To Do",
+      "prStatus": "In Review"
+    },
+    "ABC": {
+      "inProgressStatus": "In Development",
+      "todoStatus": "Backlog",
+      "prStatus": "Code Review"
+    }
   }
 }
 ```
 
-**Note**: Each project key can have its own `prStatus` configuration. If not configured for a specific project, no status transition will occur after PR creation. This allows different JIRA projects to have different workflow statuses.
+**Status Transition Configuration**:
+- `inProgressStatus`: JIRA status to transition to when starting task implementation (e.g., "In Progress", "In Development", "Implementing")
+- `todoStatus`: JIRA status to transition to when implementation fails or is incomplete (e.g., "To Do", "Backlog", "Open")
+- `prStatus`: JIRA status to transition to after PR creation (e.g., "In Review", "Code Review", "Ready for Review")
+
+**Note**: Each project key can have its own status configurations. If not configured for a specific project, no status transitions will occur. This allows different JIRA projects to have different workflow statuses.
 
 #### Configuration Loading Priority
 The tool loads `.env` files from multiple locations in priority order:

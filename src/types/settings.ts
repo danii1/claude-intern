@@ -16,6 +16,16 @@ export interface ProjectSettings {
        * e.g., "In Review", "Code Review", "Ready for Review"
        */
       prStatus?: string;
+      /**
+       * JIRA status to transition to when starting task implementation
+       * e.g., "In Progress", "In Development", "Implementing"
+       */
+      inProgressStatus?: string;
+      /**
+       * JIRA status to transition to when implementation fails or is incomplete
+       * e.g., "To Do", "Backlog", "Open"
+       */
+      todoStatus?: string;
     };
   };
 }

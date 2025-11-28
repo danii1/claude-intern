@@ -147,6 +147,8 @@ CLAUDE_CLI_PATH=claude
   const settingsContent = {
     projects: {
       "PROJECT-KEY": {
+        inProgressStatus: "In Progress",
+        todoStatus: "To Do",
         prStatus: "In Review"
       }
     }
@@ -241,6 +243,16 @@ function loadProjectSettings(): ProjectSettings | null {
 function getPrStatusForProject(projectKey: string, settings: ProjectSettings | null): string | undefined {
   // Check settings.json for project-specific configuration
   return settings?.projects?.[projectKey]?.prStatus;
+}
+
+// Get In Progress status for a specific project key
+function getInProgressStatusForProject(projectKey: string, settings: ProjectSettings | null): string | undefined {
+  return settings?.projects?.[projectKey]?.inProgressStatus;
+}
+
+// Get To Do status for a specific project key
+function getTodoStatusForProject(projectKey: string, settings: ProjectSettings | null): string | undefined {
+  return settings?.projects?.[projectKey]?.todoStatus;
 }
 
 // Load environment variables from multiple possible locations
@@ -475,6 +487,29 @@ async function processSingleTask(
       console.log("📥 Fetching issue details...");
     }
     const issue = await jiraClient.getIssue(taskKey);
+
+    // Load project settings to get status transitions
+    const projectSettings = loadProjectSettings();
+    const projectKey = taskKey.split('-')[0];
+
+    // Transition task to "In Progress" if configured (unless running with --no-claude)
+    if (options.claude && !options.skipJiraComments) {
+      const inProgressStatus = getInProgressStatusForProject(projectKey, projectSettings);
+      if (inProgressStatus && inProgressStatus.trim()) {
+        try {
+          console.log(`\n🔄 Transitioning ${taskKey} to '${inProgressStatus}'...`);
+          await jiraClient.transitionIssue(taskKey, inProgressStatus.trim());
+          console.log(`✅ Task moved to '${inProgressStatus}'`);
+        } catch (statusError) {
+          console.warn(
+            `⚠️  Failed to transition task to '${inProgressStatus}': ${
+              (statusError as Error).message
+            }`
+          );
+          console.log("   Continuing with task processing...");
+        }
+      }
+    }
 
     // Check if incomplete implementation comment exists with unchanged description
     // If so, skip processing to avoid redundant work
@@ -773,7 +808,8 @@ async function processSingleTask(
         options.prTargetBranch,
         jiraClient,
         options.skipJiraComments,
-        Number.parseInt(options.hookRetries)
+        Number.parseInt(options.hookRetries),
+        projectSettings
       );
     } else {
       console.log("\n✅ Task details saved. You can now:");
@@ -1823,7 +1859,8 @@ async function runClaude(
   prTargetBranch = "main",
   jiraClient?: JiraClient,
   skipJiraComments = false,
-  hookRetries = 10
+  hookRetries = 10,
+  projectSettings: ProjectSettings | null = null
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     // Check if task file exists
@@ -1958,6 +1995,25 @@ async function runClaude(
                 );
               }
             }
+
+            // Transition back to "To Do" status if configured
+            if (jiraClient && !skipJiraComments && taskKey && projectSettings) {
+              const projectKey = taskKey.split('-')[0];
+              const todoStatus = getTodoStatusForProject(projectKey, projectSettings);
+              if (todoStatus && todoStatus.trim()) {
+                try {
+                  console.log(`\n🔄 Moving ${taskKey} back to '${todoStatus}' due to max turns reached...`);
+                  await jiraClient.transitionIssue(taskKey, todoStatus.trim());
+                  console.log(`✅ Task moved to '${todoStatus}'`);
+                } catch (statusError) {
+                  console.warn(
+                    `⚠️  Failed to transition task to '${todoStatus}': ${
+                      (statusError as Error).message
+                    }`
+                  );
+                }
+              }
+            }
           } catch (saveError) {
             console.warn(
               `⚠️  Failed to save implementation summary: ${saveError}`
@@ -2037,6 +2093,25 @@ async function runClaude(
               console.warn(
                 `⚠️  Failed to post incomplete implementation comment to JIRA: ${commentError}`
               );
+            }
+          }
+
+          // Transition back to "To Do" status if configured
+          if (jiraClient && !skipJiraComments && taskKey && projectSettings) {
+            const projectKey = taskKey.split('-')[0];
+            const todoStatus = getTodoStatusForProject(projectKey, projectSettings);
+            if (todoStatus && todoStatus.trim()) {
+              try {
+                console.log(`\n🔄 Moving ${taskKey} back to '${todoStatus}' due to incomplete implementation...`);
+                await jiraClient.transitionIssue(taskKey, todoStatus.trim());
+                console.log(`✅ Task moved to '${todoStatus}'`);
+              } catch (statusError) {
+                console.warn(
+                  `⚠️  Failed to transition task to '${todoStatus}': ${
+                    (statusError as Error).message
+                  }`
+                );
+              }
             }
           }
 
