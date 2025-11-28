@@ -1,5 +1,79 @@
 # Claude Intern Changelog
 
+## [1.2.0] - 2025-11-28
+
+### Added
+
+- **Comment Filtering**: Automatically filter out Claude Intern's own automated comments when fetching task context
+  - Prevents context pollution by excluding previous assessment/implementation comments
+  - Ensures Claude only sees genuine user and stakeholder feedback
+  - Handles all JIRA comment formats: string, rendered HTML, and Atlassian Document Format (ADF)
+  - Uses three unique markers to identify automated comments:
+    - "Implementation Completed by Claude"
+    - "Automated Task Feasibility Assessment"
+    - "Implementation Incomplete"
+  - Logs number of filtered comments for transparency
+  - Comprehensive test coverage with 22 new tests
+
+- **Automatic Git Pull**: Pull latest changes from remote before starting task processing
+  - Ensures local repository is up-to-date before creating feature branches
+  - Prevents merge conflicts from stale local branches
+  - Fetches and pulls from remote origin automatically
+
+- **Automatic JIRA Status Transitions**: Enhanced workflow automation with status transitions
+  - **Start Transition**: Automatically move task to "In Progress" when starting implementation (if configured via `inProgressStatus`)
+  - **Success Transition**: Automatically move task to review status after PR creation (if configured via `prStatus`)
+  - **Failure Transition**: Automatically move task back to "To Do" if implementation fails (if configured via `todoStatus`)
+  - Per-project configuration via `settings.json`:
+    ```json
+    {
+      "projects": {
+        "PROJ": {
+          "inProgressStatus": "In Progress",
+          "todoStatus": "To Do",
+          "prStatus": "In Review"
+        }
+      }
+    }
+    ```
+  - Smart status transition detection based on available JIRA workflows
+
+- **Incomplete Implementation Handling**: Better handling when Claude cannot complete a task
+  - Posts detailed incomplete implementation comments to JIRA
+  - Includes possible reasons for incompletion (clarity, scope, blockers)
+  - Provides actionable recommendations for task improvements
+  - Duplicate prevention: Skips posting if same task description already has incomplete comment
+  - Transitions task back to "To Do" status (if configured)
+  - Saves task description for duplicate detection on retry
+
+- **Auto-Commit Recovery**: Automatically commit/amend changes when Claude forgets
+  - Detects when Claude makes changes but doesn't commit them
+  - Prompts user to auto-commit or amend previous commit
+  - Helps recover from interrupted workflows
+  - Includes clear git amend instructions in push hook prompts
+
+### Fixed
+
+- **Lock File Cleanup**: Release PID lock file on all exit paths
+  - Fixed issue where lock file wasn't cleaned up on early exits (e.g., missing env vars)
+  - Lock file now properly released during error conditions, SIGINT, SIGTERM, and uncaught exceptions
+  - Prevents stale locks from blocking subsequent runs
+
+- **Status Transition Timing**: Move "In Progress" transition to after clarity assessment
+  - Prevents marking tasks as "In Progress" when they fail the clarity check
+  - Only transitions to "In Progress" after confirming task is implementable
+  - More accurate workflow state management
+
+### Technical
+
+- **Test Coverage Expansion**: Added 22 comprehensive comment filtering tests
+  - Tests for all three comment formats (string, HTML, ADF)
+  - Edge case handling (null, undefined, empty, malformed bodies)
+  - Marker uniqueness verification
+  - All 99 tests passing across 5 test suites
+- **Improved Error Handling**: Better batch processing resilience with continue-on-error strategy
+- **Enhanced Logging**: More detailed git operation logging with verbose mode
+
 ## [1.1.1] - 2025-11-25
 
 ### Added
