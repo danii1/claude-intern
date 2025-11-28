@@ -517,6 +517,10 @@ async function processSingleTask(
         if (totalTasks > 1) {
           return;
         }
+        // Release lock before exiting
+        if (lockManager) {
+          lockManager.release();
+        }
         process.exit(0);
       }
     }
@@ -707,6 +711,10 @@ async function processSingleTask(
             console.error(
               'You can use: git add . && git commit -m "your commit message"'
             );
+            // Release lock before exiting
+            if (lockManager) {
+              lockManager.release();
+            }
             process.exit(1);
           } else {
             console.log(`⚠️  ${branchResult.message}`);
@@ -748,6 +756,10 @@ async function processSingleTask(
               );
             } else {
               // Exit early if task is not clear enough (single task mode)
+              // Release lock before exiting
+              if (lockManager) {
+                lockManager.release();
+              }
               process.exit(1);
             }
           }
