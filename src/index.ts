@@ -838,6 +838,26 @@ async function main(): Promise<void> {
     // Validate environment first
     validateEnvironment();
 
+    // Pull latest changes from remote (unless git is disabled)
+    if (options.git) {
+      console.log("\n📥 Pulling latest changes from remote...");
+      const pullResult = await Utils.pullLatestChanges(
+        options.prTargetBranch,
+        {
+          verbose: options.verbose,
+        }
+      );
+
+      if (pullResult.success) {
+        console.log(`✅ ${pullResult.message}`);
+      } else {
+        // Don't fail the entire workflow if pull fails - just warn the user
+        console.log(`⚠️  ${pullResult.message}`);
+        console.log("   Continuing without pulling latest changes...");
+        console.log("   You may want to pull manually before processing tasks.\n");
+      }
+    }
+
     let tasksToProcess: string[] = [];
 
     // Determine which tasks to process

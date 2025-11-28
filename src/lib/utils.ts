@@ -304,6 +304,83 @@ export class Utils {
   }
 
   /**
+   * Pull latest changes from remote repository for a specific branch
+   */
+  static async pullLatestChanges(
+    branch: string,
+    options?: {
+      verbose?: boolean;
+    }
+  ): Promise<{ success: boolean; message: string }> {
+    const verbose = options?.verbose ?? false;
+
+    try {
+      // Check if we're in a git repository
+      if (!(await Utils.isGitRepository())) {
+        return {
+          success: false,
+          message: "Not in a git repository",
+        };
+      }
+
+      // Check for uncommitted changes
+      if (await Utils.hasUncommittedChanges()) {
+        return {
+          success: false,
+          message:
+            "There are uncommitted changes. Please commit or stash them before pulling.",
+        };
+      }
+
+      const currentBranch = await Utils.getCurrentBranch();
+
+      // Switch to target branch if not already on it
+      if (currentBranch !== branch) {
+        if (verbose) {
+          console.log(`📥 Switching to branch '${branch}'...`);
+        }
+        const switchResult = await Utils.executeGitCommand(
+          ["checkout", branch],
+          { verbose }
+        );
+        if (!switchResult.success) {
+          return {
+            success: false,
+            message: `Failed to switch to branch '${branch}': ${switchResult.error}`,
+          };
+        }
+      }
+
+      if (verbose) {
+        console.log(`📥 Pulling latest changes for branch '${branch}'...`);
+      }
+
+      // Pull latest changes
+      const pullResult = await Utils.executeGitCommand(
+        ["pull", "origin", branch],
+        { verbose }
+      );
+
+      if (pullResult.success) {
+        return {
+          success: true,
+          message: `Successfully pulled latest changes for '${branch}'`,
+        };
+      }
+
+      return {
+        success: false,
+        message: `Failed to pull changes: ${pullResult.error}`,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: `Git pull failed: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
    * Get the main branch name (master or main)
    */
   static async getMainBranchName(): Promise<string> {
