@@ -492,25 +492,6 @@ async function processSingleTask(
     const projectSettings = loadProjectSettings();
     const projectKey = taskKey.split('-')[0];
 
-    // Transition task to "In Progress" if configured (unless running with --no-claude)
-    if (options.claude && !options.skipJiraComments) {
-      const inProgressStatus = getInProgressStatusForProject(projectKey, projectSettings);
-      if (inProgressStatus && inProgressStatus.trim()) {
-        try {
-          console.log(`\n🔄 Transitioning ${taskKey} to '${inProgressStatus}'...`);
-          await jiraClient.transitionIssue(taskKey, inProgressStatus.trim());
-          console.log(`✅ Task moved to '${inProgressStatus}'`);
-        } catch (statusError) {
-          console.warn(
-            `⚠️  Failed to transition task to '${inProgressStatus}': ${
-              (statusError as Error).message
-            }`
-          );
-          console.log("   Continuing with task processing...");
-        }
-      }
-    }
-
     // Check if incomplete implementation comment exists with unchanged description
     // If so, skip processing to avoid redundant work
     if (options.claude && !options.skipJiraComments) {
@@ -791,6 +772,26 @@ async function processSingleTask(
             require("fs").unlinkSync(clarityFile);
           } catch (cleanupError) {
             // Ignore cleanup errors
+          }
+        }
+      }
+
+      // Transition task to "In Progress" now that we're actually starting implementation
+      // (after clarity check passed or was skipped)
+      if (!options.skipJiraComments) {
+        const inProgressStatus = getInProgressStatusForProject(projectKey, projectSettings);
+        if (inProgressStatus && inProgressStatus.trim()) {
+          try {
+            console.log(`\n🔄 Transitioning ${taskKey} to '${inProgressStatus}'...`);
+            await jiraClient.transitionIssue(taskKey, inProgressStatus.trim());
+            console.log(`✅ Task moved to '${inProgressStatus}'`);
+          } catch (statusError) {
+            console.warn(
+              `⚠️  Failed to transition task to '${inProgressStatus}': ${
+                (statusError as Error).message
+              }`
+            );
+            console.log("   Continuing with task processing...");
           }
         }
       }
