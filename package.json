@@ -1,13 +1,13 @@
 {
   "name": "claude-intern",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "AI-powered task automation tool for JIRA and Linear. Automatically implement tasks using Claude Code with git integration and PR creation.",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
     "start": "bun run src/index.ts",
     "dev": "bun run src/index.ts",
-    "build": "bun build src/index.ts --outdir dist --target node --minify",
+    "build": "bun build src/index.ts --outdir dist --target node --minify --define __VERSION__=\"'$(node -p \"require('./package.json').version\")'\"",
     "typecheck": "bun run tsc --noEmit",
     "clean": "rm -rf dist",
     "test": "bun test",

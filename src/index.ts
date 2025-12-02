@@ -4,7 +4,8 @@ import { type ChildProcess, execSync, spawn } from "child_process";
 import { program } from "commander";
 import { config } from "dotenv";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { join, resolve } from "path";
+import { dirname, join, resolve } from "path";
+import { fileURLToPath } from "url";
 import { ClaudeFormatter } from "./lib/claude-formatter";
 import { JiraClient } from "./lib/jira-client";
 import { LockManager } from "./lib/lock-manager";
@@ -12,11 +13,13 @@ import { PRManager } from "./lib/pr-client";
 import { Utils } from "./lib/utils";
 import type { ProjectSettings } from "./types/settings";
 
-// Read package.json to get version
-const packageJson = JSON.parse(
-  readFileSync(join(__dirname, "..", "package.json"), "utf8")
-);
-const VERSION = packageJson.version;
+// Version is injected at build time via --define flag, or read from package.json in dev
+declare const __VERSION__: string;
+const VERSION = typeof __VERSION__ !== "undefined" ? __VERSION__ : "0.0.0";
+
+// Get the directory of this script at runtime (works in both ESM and bundled environments)
+const __filename_resolved = fileURLToPath(import.meta.url);
+const __dirname_resolved = dirname(__filename_resolved);
 
 interface ProgramOptions {
   claude: boolean;
@@ -274,7 +277,7 @@ function loadEnvironment(envFile?: string): void {
     resolve(process.cwd(), ".claude-intern", ".env"), // Project-specific config (highest priority)
     resolve(process.cwd(), ".env"), // Current working directory
     resolve(process.env.HOME || "~", ".env"), // Home directory
-    resolve(__dirname, "..", ".env"), // Claude-intern directory (for development)
+    resolve(__dirname_resolved, "..", ".env"), // Claude-intern directory (for development)
   ];
 
   let envLoaded = false;
@@ -427,7 +430,7 @@ if (options.envFile) {
     resolve(process.cwd(), ".claude-intern", ".env"),
     resolve(process.cwd(), ".env"),
     resolve(process.env.HOME || "~", ".env"),
-    resolve(__dirname, "..", ".env"),
+    resolve(__dirname_resolved, "..", ".env"),
   ];
   envPaths.forEach((path) => console.log(`   - ${path}`));
 }
