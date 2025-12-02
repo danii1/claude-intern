@@ -7,7 +7,7 @@
   "scripts": {
     "start": "bun run src/index.ts",
     "dev": "bun run src/index.ts",
-    "build": "bun build src/index.ts --outdir dist --target node --minify --define __VERSION__=\"'$(node -p \"require('./package.json').version\")'\"",
+    "build": "bun run build.ts",
     "typecheck": "bun run tsc --noEmit",
     "clean": "rm -rf dist",
     "test": "bun test",
