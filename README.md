@@ -98,7 +98,12 @@ Update your `.env` file with your JIRA details:
 
    Optional PR integration:
    - `GITHUB_TOKEN`: GitHub personal access token for creating pull requests
+     - **Classic token**: Requires `repo` scope
+     - **Fine-grained token** (recommended): Requires `Pull requests: Read and write` and `Contents: Read` permissions
+     - Create at: https://github.com/settings/tokens
    - `BITBUCKET_TOKEN`: Bitbucket app password for creating pull requests
+     - Requires `Repositories: Write` permission
+     - Create at: https://bitbucket.org/account/settings/app-passwords/
 
    The `.env.sample` file includes helpful comments and optional configuration options.
 

@@ -72,8 +72,10 @@ cat > .env << EOF
 JIRA_BASE_URL=https://your-company.atlassian.net
 JIRA_EMAIL=your-email@company.com
 JIRA_API_TOKEN=your-api-token
-# Optional: For PR creation
+# Optional: For PR creation (see ENV_SETUP.md for token permissions)
+# GitHub: classic token needs 'repo' scope, fine-grained needs 'Pull requests: Read and write' + 'Contents: Read'
 GITHUB_TOKEN=your-github-token
+# Bitbucket: needs 'Repositories: Write' permission
 BITBUCKET_TOKEN=your-bitbucket-token
 # Optional: Auto-transition JIRA status after PR creation
 JIRA_PR_STATUS="In Review"
@@ -87,8 +89,10 @@ EOF
 export JIRA_BASE_URL="https://your-company.atlassian.net"
 export JIRA_EMAIL="your-email@company.com"
 export JIRA_API_TOKEN="your-api-token"
-# Optional: For PR creation
+# Optional: For PR creation (see ENV_SETUP.md for token permissions)
+# GitHub: classic token needs 'repo' scope, fine-grained needs 'Pull requests: Read and write' + 'Contents: Read'
 export GITHUB_TOKEN="your-github-token"
+# Bitbucket: needs 'Repositories: Write' permission
 export BITBUCKET_TOKEN="your-bitbucket-token"
 # Optional: Auto-transition JIRA status after PR creation
 export JIRA_PR_STATUS="In Review"

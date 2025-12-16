@@ -180,7 +180,9 @@ Required environment variables:
 
 Optional environment variables for PR creation:
 - `GITHUB_TOKEN` - GitHub personal access token for creating PRs
-- `BITBUCKET_TOKEN` - Bitbucket app password for creating PRs
+  - Classic token: requires `repo` scope
+  - Fine-grained token (recommended): requires `Pull requests: Read and write` + `Contents: Read`
+- `BITBUCKET_TOKEN` - Bitbucket app password for creating PRs (requires `Repositories: Write`)
 
 Optional environment variables for workflow automation:
 - `CLAUDE_INTERN_OUTPUT_DIR` - Base directory for task files and attachments (default: `/tmp/claude-intern-tasks`)

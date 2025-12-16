@@ -269,8 +269,8 @@ export JIRA_PR_STATUS="In Review"
 - Detects repository platform from git remote URL
 - PR title format: `[TASK-123] Task Summary`
 - PR body includes Claude's implementation details and links back to JIRA
-- GitHub: Requires `GITHUB_TOKEN` environment variable
-- Bitbucket: Requires `BITBUCKET_TOKEN`, workspace auto-detected from git remote
+- GitHub: Requires `GITHUB_TOKEN` (classic: `repo` scope, or fine-grained: `Pull requests: Read and write` + `Contents: Read`)
+- Bitbucket: Requires `BITBUCKET_TOKEN` (`Repositories: Write`), workspace auto-detected from git remote
 - Can be enabled with `--create-pr` flag
 - Target branch can be specified with `--pr-target-branch` (defaults to 'main')
 
@@ -335,7 +335,10 @@ claude-intern PROJ-123 --no-git
 
 7. **"PR creation failed"**
    - Ensure you have the correct token configured (`GITHUB_TOKEN` or `BITBUCKET_TOKEN`)
-   - Check token permissions (GitHub needs 'repo' scope, Bitbucket needs 'Repositories: Write')
+   - Check token permissions:
+     - GitHub classic token: needs `repo` scope
+     - GitHub fine-grained token: needs `Pull requests: Read and write` + `Contents: Read`
+     - Bitbucket: needs `Repositories: Write`
    - Verify you're in a repository with a remote origin
    - Confirm the repository platform is detected correctly
    - Use `--verbose` flag to see detailed error messages

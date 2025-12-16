@@ -21,6 +21,36 @@ BITBUCKET_TOKEN=your-bitbucket-token    # For Bitbucket PR creation
 JIRA_PR_STATUS="In Review"              # Auto-transition JIRA status after PR creation
 ```
 
+### GitHub Token Permissions
+
+When creating a GitHub personal access token, you need the following permissions:
+
+**Classic Personal Access Token:**
+- `repo` scope (Full control of private repositories)
+- Or `public_repo` if you only work with public repositories
+
+**Fine-grained Personal Access Token (recommended):**
+- **Pull requests**: Read and write
+- **Contents**: Read (needed to read branch info for the PR)
+
+To create a GitHub token:
+1. Go to https://github.com/settings/tokens
+2. Choose "Fine-grained tokens" (recommended) or "Tokens (classic)"
+3. For fine-grained tokens, select the specific repositories you need access to
+4. Grant the permissions listed above
+5. Set the token as `GITHUB_TOKEN` in your `.env` file
+
+### Bitbucket Token Permissions
+
+When creating a Bitbucket app password:
+- **Repositories**: Write permission
+
+To create a Bitbucket app password:
+1. Go to https://bitbucket.org/account/settings/app-passwords/
+2. Click "Create app password"
+3. Grant "Repositories: Write" permission
+4. Set the token as `BITBUCKET_TOKEN` in your `.env` file
+
 ## Setup Methods (in order of precedence)
 
 ### 1. Custom .env File (--env-file option)
