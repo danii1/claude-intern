@@ -16,12 +16,21 @@ CLAUDE_CLI_PATH=claude  # Optional, defaults to 'claude'
 ## Optional Environment Variables (PR Integration)
 
 ```bash
-GITHUB_TOKEN=your-github-token-here     # For GitHub PR creation
+# Option 1: GitHub Personal Access Token (for individual users)
+GITHUB_TOKEN=your-github-token-here
+
+# Option 2: GitHub App Authentication (for organizations)
+GITHUB_APP_ID=123456
+GITHUB_APP_PRIVATE_KEY_PATH=/path/to/private-key.pem
+# Or base64-encoded: GITHUB_APP_PRIVATE_KEY_BASE64=LS0tLS1CRUdJTi4uLg==
+
+# Bitbucket
 BITBUCKET_TOKEN=your-bitbucket-token    # For Bitbucket PR creation
-JIRA_PR_STATUS="In Review"              # Auto-transition JIRA status after PR creation
 ```
 
-### GitHub Token Permissions
+**Note:** JIRA PR status transitions are now configured per-project in `settings.json`.
+
+### Option 1: GitHub Personal Access Token
 
 When creating a GitHub personal access token, you need the following permissions:
 
@@ -39,6 +48,36 @@ To create a GitHub token:
 3. For fine-grained tokens, select the specific repositories you need access to
 4. Grant the permissions listed above
 5. Set the token as `GITHUB_TOKEN` in your `.env` file
+
+### Option 2: GitHub App Authentication
+
+For organizations that want centralized control, create a GitHub App instead of using individual tokens.
+
+**Required App permissions:**
+- **Contents**: Read (to check branches)
+- **Pull requests**: Read and write (to create PRs)
+
+**Setup steps:**
+1. Go to your organization's Settings → Developer settings → GitHub Apps → New GitHub App
+2. Set repository permissions: Contents (Read), Pull requests (Read and write)
+3. Disable webhooks (not needed)
+4. Generate a private key after creating the App
+5. Install the App on your repositories
+6. Configure in your `.env`:
+   ```bash
+   GITHUB_APP_ID=123456
+   GITHUB_APP_PRIVATE_KEY_PATH=/path/to/private-key.pem
+   ```
+
+**For CI/CD environments**, use base64-encoded key:
+```bash
+GITHUB_APP_ID=123456
+GITHUB_APP_PRIVATE_KEY_BASE64=LS0tLS1CRUdJTi4uLg==
+```
+
+To encode: `base64 -i your-key.pem` (macOS) or `base64 -w 0 your-key.pem` (Linux)
+
+**Note:** If both `GITHUB_TOKEN` and GitHub App credentials are set, `GITHUB_TOKEN` takes precedence.
 
 ### Bitbucket Token Permissions
 

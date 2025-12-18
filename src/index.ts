@@ -116,13 +116,35 @@ CLAUDE_CLI_PATH=claude
 # VERBOSE=true
 
 # Optional: Pull Request Integration
-# GitHub personal access token for creating pull requests
-# Create one at: https://github.com/settings/tokens (needs 'repo' scope)
+#
+# Option 1: GitHub Personal Access Token (for individual users)
+# Create at: https://github.com/settings/tokens
+# Required permissions:
+#   - Classic token: 'repo' scope (or 'public_repo' for public repos only)
+#   - Fine-grained token (recommended): 'Pull requests: Read and write' + 'Contents: Read'
 # GITHUB_TOKEN=your-github-token-here
+#
+# Option 2: GitHub App Authentication (for organizations)
+# Each organization creates their own GitHub App for centralized control.
+# Create at: https://github.com/settings/apps (or your org's settings)
+# Required App permissions:
+#   - Repository permissions:
+#     - Contents: Read (to check branches)
+#     - Pull requests: Read and write (to create PRs)
+# After creating the App, generate a private key and install the App on your repositories.
+#
+# GITHUB_APP_ID=123456
+# Private key can be provided as a file path:
+# GITHUB_APP_PRIVATE_KEY_PATH=/path/to/your-app.private-key.pem
+# Or as base64-encoded content (useful for CI/CD environments):
+# To encode: base64 -i your-key.pem (macOS) or base64 -w 0 your-key.pem (Linux)
+# GITHUB_APP_PRIVATE_KEY_BASE64=LS0tLS1CRUdJTi4uLg==
+#
+# Note: If both GITHUB_TOKEN and GitHub App credentials are set, GITHUB_TOKEN takes precedence.
 
 # Bitbucket app password for creating pull requests
-# Create one at: https://bitbucket.org/account/settings/app-passwords/
-# Needs 'Repositories: Write' permission
+# Create at: https://bitbucket.org/account/settings/app-passwords/
+# Required permissions: 'Repositories: Write'
 # BITBUCKET_TOKEN=your-bitbucket-app-password-here
 
 # Note: Bitbucket workspace is automatically detected from your git remote URL

@@ -37,11 +37,14 @@ JIRA_BASE_URL=https://your-company.atlassian.net
 JIRA_EMAIL=your-email@company.com
 JIRA_API_TOKEN=your-api-token-here
 CLAUDE_CLI_PATH=claude
-# Optional: For automatic PR creation
+# Optional: For automatic PR creation (see ENV_SETUP.md for details)
+# Option 1: Personal access token
 GITHUB_TOKEN=your-github-token-here
+# Option 2: GitHub App (for organizations)
+# GITHUB_APP_ID=123456
+# GITHUB_APP_PRIVATE_KEY_PATH=/path/to/private-key.pem
+# Bitbucket
 BITBUCKET_TOKEN=your-bitbucket-token-here
-# Optional: Auto-transition JIRA status after PR creation
-JIRA_PR_STATUS="In Review"
 EOF
 ```
 
@@ -130,7 +133,7 @@ claude-intern PROJ-123 --create-pr --pr-target-branch develop
 claude-intern PROJ-123 --create-pr --max-turns 50 --verbose
 
 # PR creation works with both platforms:
-# - GitHub: Detects from git remote, uses GITHUB_TOKEN
+# - GitHub: Detects from git remote, uses GITHUB_TOKEN or GitHub App
 # - Bitbucket: Detects workspace from git remote, uses BITBUCKET_TOKEN
 ```
 
@@ -240,11 +243,14 @@ export JIRA_BASE_URL="https://your-company.atlassian.net"
 export JIRA_EMAIL="your-email@company.com"
 export JIRA_API_TOKEN="your-api-token"
 export CLAUDE_CLI_PATH="claude"
-# Optional: For PR creation
+# Optional: For PR creation (see ENV_SETUP.md for details)
+# Option 1: Personal access token
 export GITHUB_TOKEN="your-github-token"
+# Option 2: GitHub App (for organizations)
+# export GITHUB_APP_ID="123456"
+# export GITHUB_APP_PRIVATE_KEY_PATH="/path/to/private-key.pem"
+# Bitbucket
 export BITBUCKET_TOKEN="your-bitbucket-token"
-# Optional: Auto-transition JIRA status after PR creation
-export JIRA_PR_STATUS="In Review"
 ```
 
 ## Git Integration Details
@@ -269,7 +275,7 @@ export JIRA_PR_STATUS="In Review"
 - Detects repository platform from git remote URL
 - PR title format: `[TASK-123] Task Summary`
 - PR body includes Claude's implementation details and links back to JIRA
-- GitHub: Requires `GITHUB_TOKEN` (classic: `repo` scope, or fine-grained: `Pull requests: Read and write` + `Contents: Read`)
+- GitHub: Requires `GITHUB_TOKEN` or GitHub App authentication (see ENV_SETUP.md)
 - Bitbucket: Requires `BITBUCKET_TOKEN` (`Repositories: Write`), workspace auto-detected from git remote
 - Can be enabled with `--create-pr` flag
 - Target branch can be specified with `--pr-target-branch` (defaults to 'main')
@@ -334,11 +340,15 @@ claude-intern PROJ-123 --no-git
    - Review the task description for clarity
 
 7. **"PR creation failed"**
-   - Ensure you have the correct token configured (`GITHUB_TOKEN` or `BITBUCKET_TOKEN`)
-   - Check token permissions:
+   - Ensure you have the correct token configured:
+     - GitHub: `GITHUB_TOKEN` or GitHub App (`GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY_PATH`)
+     - Bitbucket: `BITBUCKET_TOKEN`
+   - Check token/App permissions:
      - GitHub classic token: needs `repo` scope
      - GitHub fine-grained token: needs `Pull requests: Read and write` + `Contents: Read`
+     - GitHub App: needs `Contents: Read` + `Pull requests: Read and write`
      - Bitbucket: needs `Repositories: Write`
+   - For GitHub App: Ensure the App is installed on the repository
    - Verify you're in a repository with a remote origin
    - Confirm the repository platform is detected correctly
    - Use `--verbose` flag to see detailed error messages

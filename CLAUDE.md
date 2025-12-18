@@ -179,9 +179,15 @@ Required environment variables:
 - `JIRA_API_TOKEN` - JIRA API token for authentication
 
 Optional environment variables for PR creation:
-- `GITHUB_TOKEN` - GitHub personal access token for creating PRs
-  - Classic token: requires `repo` scope
-  - Fine-grained token (recommended): requires `Pull requests: Read and write` + `Contents: Read`
+- **Option 1: GitHub Personal Access Token** (for individual users)
+  - `GITHUB_TOKEN` - GitHub personal access token for creating PRs
+    - Classic token: requires `repo` scope
+    - Fine-grained token (recommended): requires `Pull requests: Read and write` + `Contents: Read`
+- **Option 2: GitHub App Authentication** (for organizations)
+  - `GITHUB_APP_ID` - Your GitHub App's ID
+  - `GITHUB_APP_PRIVATE_KEY_PATH` - Path to the App's private key (.pem file)
+  - `GITHUB_APP_PRIVATE_KEY_BASE64` - Alternative: base64-encoded private key (for CI/CD)
+  - Note: Each organization creates their own GitHub App. See README.md for setup instructions.
 - `BITBUCKET_TOKEN` - Bitbucket app password for creating PRs (requires `Repositories: Write`)
 
 Optional environment variables for workflow automation:

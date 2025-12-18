@@ -1,5 +1,25 @@
 # Claude Intern Changelog
 
+## [1.3.0] - 2025-12-18
+
+### Added
+
+- **GitHub App Authentication**: Organizations can now use GitHub Apps for PR creation instead of individual personal access tokens
+  - Each organization creates their own GitHub App for centralized control
+  - Fine-grained permissions: only requires Contents (Read) and Pull requests (Read and write)
+  - No individual tokens needed - the App authenticates itself
+  - Centralized audit trail - all actions show as coming from the App
+  - Supports two private key formats:
+    - File path: `GITHUB_APP_PRIVATE_KEY_PATH=/path/to/key.pem`
+    - Base64-encoded: `GITHUB_APP_PRIVATE_KEY_BASE64=...` (useful for CI/CD)
+  - JWT-based authentication with automatic installation token caching
+  - Falls back gracefully if App is not installed on a repository
+
+### Changed
+
+- Updated documentation across all markdown files with GitHub App setup instructions
+- `GITHUB_TOKEN` takes precedence over GitHub App credentials when both are configured
+
 ## [1.2.0] - 2025-11-28
 
 ### Added
@@ -207,7 +227,7 @@
   - Multi-location `.env` file loading (current directory, home directory, installation directory)
   - Custom environment file path with `--env-file`
   - Required: `JIRA_BASE_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`
-  - Optional: `GITHUB_TOKEN`, `BITBUCKET_TOKEN`, `JIRA_PR_STATUS`, `CLAUDE_INTERN_OUTPUT_DIR`
+  - Optional: `GITHUB_TOKEN` or GitHub App (`GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_PATH`), `BITBUCKET_TOKEN`, `CLAUDE_INTERN_OUTPUT_DIR`
 
 ### Technical Architecture
 

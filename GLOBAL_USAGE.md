@@ -72,13 +72,14 @@ cat > .env << EOF
 JIRA_BASE_URL=https://your-company.atlassian.net
 JIRA_EMAIL=your-email@company.com
 JIRA_API_TOKEN=your-api-token
-# Optional: For PR creation (see ENV_SETUP.md for token permissions)
-# GitHub: classic token needs 'repo' scope, fine-grained needs 'Pull requests: Read and write' + 'Contents: Read'
+# Optional: For PR creation (see ENV_SETUP.md for details)
+# Option 1: Personal access token
 GITHUB_TOKEN=your-github-token
+# Option 2: GitHub App (for organizations)
+# GITHUB_APP_ID=123456
+# GITHUB_APP_PRIVATE_KEY_PATH=/path/to/private-key.pem
 # Bitbucket: needs 'Repositories: Write' permission
 BITBUCKET_TOKEN=your-bitbucket-token
-# Optional: Auto-transition JIRA status after PR creation
-JIRA_PR_STATUS="In Review"
 EOF
 ```
 
@@ -89,13 +90,14 @@ EOF
 export JIRA_BASE_URL="https://your-company.atlassian.net"
 export JIRA_EMAIL="your-email@company.com"
 export JIRA_API_TOKEN="your-api-token"
-# Optional: For PR creation (see ENV_SETUP.md for token permissions)
-# GitHub: classic token needs 'repo' scope, fine-grained needs 'Pull requests: Read and write' + 'Contents: Read'
+# Optional: For PR creation (see ENV_SETUP.md for details)
+# Option 1: Personal access token
 export GITHUB_TOKEN="your-github-token"
+# Option 2: GitHub App (for organizations)
+# export GITHUB_APP_ID="123456"
+# export GITHUB_APP_PRIVATE_KEY_PATH="/path/to/private-key.pem"
 # Bitbucket: needs 'Repositories: Write' permission
 export BITBUCKET_TOKEN="your-bitbucket-token"
-# Optional: Auto-transition JIRA status after PR creation
-export JIRA_PR_STATUS="In Review"
 ```
 
 ## Common Commands

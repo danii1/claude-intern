@@ -1,4 +1,5 @@
 import type { AtlassianDocument, JiraIssue } from "../types/jira";
+import { GitHubAppAuth } from "./github-app-auth";
 
 export interface PRInfo {
   title: string;
@@ -204,12 +205,20 @@ export class BitbucketPRClient extends PRClient {
 
 export class PRManager {
   private githubClient?: GitHubPRClient;
+  private githubAppAuth?: GitHubAppAuth;
 
   constructor() {
-    // Initialize GitHub client if token is available
+    // Initialize GitHub client - prefer personal token over App auth
     const githubToken = process.env.GITHUB_TOKEN;
     if (githubToken) {
       this.githubClient = new GitHubPRClient(githubToken);
+    } else {
+      // Try GitHub App authentication
+      const appAuth = GitHubAppAuth.fromEnvironment();
+      if (appAuth) {
+        this.githubAppAuth = appAuth;
+        console.log("🔑 Using GitHub App authentication for PR creation");
+      }
     }
   }
 
@@ -313,9 +322,34 @@ export class PRManager {
       repository: repoInfo.repository,
     };
 
-    if (repoInfo.platform === "github" && this.githubClient) {
-      return await this.githubClient.createPullRequest(prInfo);
+    if (repoInfo.platform === "github") {
+      // Use existing client with personal token
+      if (this.githubClient) {
+        return await this.githubClient.createPullRequest(prInfo);
+      }
+
+      // Use GitHub App authentication
+      if (this.githubAppAuth) {
+        try {
+          const [owner, repo] = repoInfo.repository.split("/");
+          const token = await this.githubAppAuth.getTokenForRepository(owner, repo);
+          const client = new GitHubPRClient(token);
+          return await client.createPullRequest(prInfo);
+        } catch (error) {
+          return {
+            success: false,
+            message: `GitHub App authentication failed: ${(error as Error).message}`,
+          };
+        }
+      }
+
+      return {
+        success: false,
+        message:
+          "GitHub client not configured. Please set GITHUB_TOKEN or configure GitHub App (GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY_PATH).",
+      };
     }
+
     if (repoInfo.platform === "bitbucket") {
       // Create Bitbucket client dynamically with detected workspace
       const bitbucketToken = process.env.BITBUCKET_TOKEN;
@@ -341,13 +375,11 @@ export class PRManager {
       );
       return await bitbucketClient.createPullRequest(prInfo);
     }
-    const platformName =
-      repoInfo.platform === "github" ? "GitHub" : "Bitbucket";
-    const tokenVar =
-      repoInfo.platform === "github" ? "GITHUB_TOKEN" : "BITBUCKET_TOKEN";
+
+    // This shouldn't be reached since we handle unknown platform at the start
     return {
       success: false,
-      message: `${platformName} client not configured. Please set ${tokenVar} environment variable.`,
+      message: "Unsupported repository platform.",
     };
   }
 

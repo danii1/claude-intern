@@ -96,11 +96,20 @@ Update your `.env` file with your JIRA details:
    - `JIRA_EMAIL`: Your JIRA email address
    - `JIRA_API_TOKEN`: Your JIRA API token (create one at https://id.atlassian.com/manage-profile/security/api-tokens)
 
-   Optional PR integration:
+   Optional PR integration (choose one):
+
+   **Option 1: GitHub Personal Access Token** (for individual users)
    - `GITHUB_TOKEN`: GitHub personal access token for creating pull requests
      - **Classic token**: Requires `repo` scope
      - **Fine-grained token** (recommended): Requires `Pull requests: Read and write` and `Contents: Read` permissions
      - Create at: https://github.com/settings/tokens
+
+   **Option 2: GitHub App Authentication** (for organizations)
+   - `GITHUB_APP_ID`: Your GitHub App's ID
+   - `GITHUB_APP_PRIVATE_KEY_PATH`: Path to your App's private key file
+   - See [GitHub App Setup](#github-app-setup) section below for detailed instructions
+
+   **Bitbucket:**
    - `BITBUCKET_TOKEN`: Bitbucket app password for creating pull requests
      - Requires `Repositories: Write` permission
      - Create at: https://bitbucket.org/account/settings/app-passwords/
@@ -132,6 +141,63 @@ The `.claude-intern/settings.json` file allows you to configure project-specific
   - If not configured, no status transition will occur
 
 **Example:** If you work with multiple JIRA projects that have different workflows (e.g., "PROJ" uses "In Review" but "ABC" uses "Code Review"), configure each project's status in `settings.json`.
+
+### GitHub App Setup
+
+For organizations that want centralized control over PR creation, you can configure a GitHub App instead of using individual personal access tokens.
+
+**Benefits of GitHub App authentication:**
+- No individual tokens needed - the App authenticates itself
+- Fine-grained permissions - only pull request and content read access
+- Centralized control - organization admins manage the App installation
+- Audit trail - all actions show as coming from the App, not individual users
+
+**Setup Steps:**
+
+1. **Create a GitHub App:**
+   - Go to your organization's Settings → Developer settings → GitHub Apps → New GitHub App
+   - Or for personal account: https://github.com/settings/apps
+   - Fill in the required fields:
+     - **App name:** e.g., "Claude Intern Bot" (must be unique across GitHub)
+     - **Homepage URL:** Your project URL or a placeholder
+     - **Webhook:** Uncheck "Active" (not needed)
+   - Set **Repository permissions:**
+     - **Contents:** Read (to check branches)
+     - **Pull requests:** Read and write (to create PRs)
+   - Click "Create GitHub App"
+
+2. **Generate a Private Key:**
+   - On your App's settings page, scroll to "Private keys"
+   - Click "Generate a private key"
+   - Save the downloaded `.pem` file securely
+
+3. **Install the App:**
+   - Go to your App's page → "Install App"
+   - Select the organization/account and repositories where you want to use it
+
+4. **Configure claude-intern:**
+   Add to your `.claude-intern/.env`:
+   ```bash
+   GITHUB_APP_ID=123456  # Your App's ID (shown on the App's settings page)
+   GITHUB_APP_PRIVATE_KEY_PATH=/secure/path/to/your-app.private-key.pem
+   ```
+
+   Or for CI/CD environments, use base64-encoded key:
+   ```bash
+   GITHUB_APP_ID=123456
+   GITHUB_APP_PRIVATE_KEY_BASE64=LS0tLS1CRUdJTi4uLg==
+   ```
+
+   To encode your key:
+   ```bash
+   # macOS
+   base64 -i your-app.private-key.pem
+
+   # Linux
+   base64 -w 0 your-app.private-key.pem
+   ```
+
+**Note:** If both `GITHUB_TOKEN` and GitHub App credentials are configured, `GITHUB_TOKEN` takes precedence.
 
 ## Usage
 
