@@ -7,6 +7,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
 import { ClaudeFormatter } from "./lib/claude-formatter";
+import { GitHubAppAuth } from "./lib/github-app-auth";
 import { JiraClient } from "./lib/jira-client";
 import { LockManager } from "./lib/lock-manager";
 import { PRManager } from "./lib/pr-client";
@@ -833,6 +834,21 @@ async function processSingleTask(
         }
       }
 
+      // Get GitHub App author info for commits if configured
+      let gitAuthor: { name: string; email: string } | undefined;
+      if (options.git && options.autoCommit && !process.env.GITHUB_TOKEN) {
+        const githubAppAuth = GitHubAppAuth.fromEnvironment();
+        if (githubAppAuth) {
+          try {
+            gitAuthor = await githubAppAuth.getGitAuthor();
+            console.log(`🤖 Commits will be authored by: ${gitAuthor.name}`);
+          } catch (error) {
+            console.warn(`⚠️  Could not get GitHub App author info: ${(error as Error).message}`);
+            console.log("   Commits will use local git config instead.");
+          }
+        }
+      }
+
       console.log("\n🤖 Running Claude with task details...");
       await runClaude(
         outputFile,
@@ -847,7 +863,8 @@ async function processSingleTask(
         jiraClient,
         options.skipJiraComments,
         Number.parseInt(options.hookRetries),
-        projectSettings
+        projectSettings,
+        gitAuthor
       );
     } else {
       console.log("\n✅ Task details saved. You can now:");
@@ -1898,7 +1915,8 @@ async function runClaude(
   jiraClient?: JiraClient,
   skipJiraComments = false,
   hookRetries = 10,
-  projectSettings: ProjectSettings | null = null
+  projectSettings: ProjectSettings | null = null,
+  gitAuthor?: { name: string; email: string }
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     // Check if task file exists
@@ -2173,6 +2191,7 @@ async function runClaude(
               attempt++;
               const commitResult = await Utils.commitChanges(taskKey, taskSummary, {
                 verbose: options.verbose,
+                author: gitAuthor,
               });
 
               if (commitResult.success) {

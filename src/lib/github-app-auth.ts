@@ -11,6 +11,12 @@ interface InstallationToken {
   expiresAt: Date;
 }
 
+export interface GitHubAppInfo {
+  id: number;
+  slug: string;
+  name: string;
+}
+
 interface InstallationCache {
   [key: string]: {
     installationId: number;
@@ -35,6 +41,7 @@ export class GitHubAppAuth {
   private privateKey: string;
   private baseUrl: string;
   private cache: InstallationCache = {};
+  private appInfoCache?: GitHubAppInfo;
 
   constructor(config: GitHubAppConfig, baseUrl = "https://api.github.com") {
     this.appId = config.appId;
@@ -199,6 +206,56 @@ export class GitHubAppAuth {
     return {
       token: data.token,
       expiresAt: new Date(data.expires_at)
+    };
+  }
+
+  /**
+   * Get information about the GitHub App (id, slug, name).
+   * This is used to construct the bot account identity for commits.
+   */
+  async getAppInfo(): Promise<GitHubAppInfo> {
+    // Return cached info if available
+    if (this.appInfoCache) {
+      return this.appInfoCache;
+    }
+
+    const jwt = this.generateJWT();
+    const url = `${this.baseUrl}/app`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+        Accept: "application/vnd.github.v3+json",
+        "User-Agent": "claude-intern"
+      }
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: "Unknown error" })) as any;
+      throw new Error(`Failed to get GitHub App info: ${error.message || response.statusText}`);
+    }
+
+    const data = await response.json() as any;
+
+    this.appInfoCache = {
+      id: data.id,
+      slug: data.slug,
+      name: data.name
+    };
+
+    return this.appInfoCache;
+  }
+
+  /**
+   * Get the Git author identity for commits made by this GitHub App.
+   * Returns the bot account format: "app-name[bot] <app-id+app-name[bot]@users.noreply.github.com>"
+   */
+  async getGitAuthor(): Promise<{ name: string; email: string }> {
+    const appInfo = await this.getAppInfo();
+    return {
+      name: `${appInfo.slug}[bot]`,
+      email: `${appInfo.id}+${appInfo.slug}[bot]@users.noreply.github.com`
     };
   }
 

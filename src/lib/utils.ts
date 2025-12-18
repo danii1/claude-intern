@@ -235,9 +235,13 @@ export class Utils {
   static async commitChanges(
     taskKey: string,
     taskSummary: string,
-    options?: { verbose?: boolean }
+    options?: {
+      verbose?: boolean;
+      author?: { name: string; email: string };
+    }
   ): Promise<{ success: boolean; message: string; hookError?: string }> {
     const verbose = options?.verbose ?? false;
+    const author = options?.author;
 
     try {
       // Check if we're in a git repository
@@ -268,12 +272,19 @@ export class Utils {
       // Create commit message
       const commitMessage = `feat: implement ${taskKey} - ${taskSummary}`;
 
+      // Build commit command with optional author override
+      const commitArgs: string[] = [];
+
+      // If author is provided, use -c flags to override user.name and user.email
+      if (author) {
+        commitArgs.push("-c", `user.name=${author.name}`);
+        commitArgs.push("-c", `user.email=${author.email}`);
+      }
+
+      commitArgs.push("commit", "-m", commitMessage);
+
       // Commit changes
-      const commitResult = await Utils.executeGitCommand([
-        "commit",
-        "-m",
-        commitMessage,
-      ], { verbose });
+      const commitResult = await Utils.executeGitCommand(commitArgs, { verbose });
       if (commitResult.success) {
         return {
           success: true,

@@ -14,6 +14,7 @@
     - Base64-encoded: `GITHUB_APP_PRIVATE_KEY_BASE64=...` (useful for CI/CD)
   - JWT-based authentication with automatic installation token caching
   - Falls back gracefully if App is not installed on a repository
+  - **Auto-detected Git author**: Commits are automatically attributed to the GitHub App's bot account (e.g., `my-app[bot]`)
 
 ### Changed
 
