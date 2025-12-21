@@ -468,7 +468,22 @@ The webhook server uses **p-queue** for sequential processing and a **single reu
 - **Single Reusable Worktree**: All PR reviews share one worktree at `.claude-intern/review-worktree/` that switches branches as needed
 - **No Cleanup Needed**: The worktree persists and is reused, avoiding the overhead of creating/removing worktrees for each review
 - **Branch Switching**: The worktree automatically switches to the PR branch for each review, fetching and pulling the latest changes
+- **Automatic Dependency Installation**: Dependencies are automatically installed when preparing the worktree using the detected package manager (supports JS/TS, Python, Ruby, Go, Rust, PHP, Java)
 - **No Main Branch Conflicts**: Regular JIRA task processing continues in the main working directory, while PR reviews work in the isolated worktree
+
+#### Supported Package Managers
+
+The worktree preparation automatically detects and installs dependencies for multiple languages:
+
+- **JavaScript/TypeScript**: bun, pnpm, yarn, npm (requires lock file)
+- **Python**: poetry, pipenv, pip (requirements.txt)
+- **Ruby**: bundle (Gemfile)
+- **Go**: go mod
+- **Rust**: cargo
+- **PHP**: composer
+- **Java**: maven, gradle
+
+Dependencies are only installed when a package manifest and lock file (where applicable) are detected. This ensures Claude has access to all dependencies needed to run tests, linters, and build commands when addressing review feedback.
 
 **Important:** The webhook server **only processes reviews that mention the bot**. Reviewers must include `@your-bot-name` in either the review body or in one of the review comments to trigger automatic processing. This prevents the bot from responding to all "changes requested" reviews and gives reviewers control over when automation should run.
 

@@ -985,6 +985,19 @@ export class Utils {
           if (verbose) {
             console.log(`✅ Switched to branch ${branch}`);
           }
+
+          // Install dependencies to ensure Claude has everything needed
+          if (verbose) {
+            console.log(`📦 Installing dependencies...`);
+          }
+          const installResult = await Utils.installDependencies(worktreePath, { verbose });
+
+          if (!installResult.success) {
+            // Log warning but don't fail - Claude can still work without dependencies in some cases
+            console.warn(`⚠️  Failed to install dependencies: ${installResult.error}`);
+            console.warn(`   Claude may not be able to run tests or build commands`);
+          }
+
           return { success: true, path: worktreePath };
         }
 
@@ -1033,6 +1046,18 @@ export class Utils {
         console.log(`✅ Worktree ready at ${worktreePath}`);
       }
 
+      // Install dependencies to ensure Claude has everything needed
+      if (verbose) {
+        console.log(`📦 Installing dependencies...`);
+      }
+      const installResult = await Utils.installDependencies(worktreePath, { verbose });
+
+      if (!installResult.success) {
+        // Log warning but don't fail - Claude can still work without dependencies in some cases
+        console.warn(`⚠️  Failed to install dependencies: ${installResult.error}`);
+        console.warn(`   Claude may not be able to run tests or build commands`);
+      }
+
       return { success: true, path: worktreePath };
     } catch (error) {
       return {
@@ -1047,5 +1072,147 @@ export class Utils {
    */
   static getReviewWorktreePath(): string {
     return join(process.cwd(), ".claude-intern", "review-worktree");
+  }
+
+  /**
+   * Detect and run the appropriate package manager to install dependencies.
+   * Supports: JavaScript/TypeScript (bun, pnpm, yarn, npm), Python (poetry, pip),
+   * Ruby (bundle), Go (go mod), Rust (cargo), PHP (composer), and Java (maven, gradle).
+   * Returns true if dependencies were installed successfully.
+   */
+  static async installDependencies(
+    workingDir: string,
+    options?: { verbose?: boolean }
+  ): Promise<{ success: boolean; packageManager?: string; error?: string }> {
+    const verbose = options?.verbose ?? false;
+
+    // Define package managers for each language/ecosystem
+    const packageManagers = [
+      // JavaScript/TypeScript (only with lock files)
+      { name: "bun", manifestFile: "package.json", lockFile: "bun.lockb", command: "bun", args: ["install"] },
+      { name: "pnpm", manifestFile: "package.json", lockFile: "pnpm-lock.yaml", command: "pnpm", args: ["install", "--frozen-lockfile"] },
+      { name: "yarn", manifestFile: "package.json", lockFile: "yarn.lock", command: "yarn", args: ["install", "--frozen-lockfile"] },
+      { name: "npm", manifestFile: "package.json", lockFile: "package-lock.json", command: "npm", args: ["ci"] },
+
+      // Python
+      { name: "poetry", manifestFile: "pyproject.toml", lockFile: "poetry.lock", command: "poetry", args: ["install", "--no-root"] },
+      { name: "pip", manifestFile: "requirements.txt", lockFile: null, command: "pip", args: ["install", "-r", "requirements.txt"] },
+      { name: "pipenv", manifestFile: "Pipfile", lockFile: "Pipfile.lock", command: "pipenv", args: ["install", "--deploy"] },
+
+      // Ruby
+      { name: "bundle", manifestFile: "Gemfile", lockFile: "Gemfile.lock", command: "bundle", args: ["install"] },
+
+      // Go
+      { name: "go", manifestFile: "go.mod", lockFile: "go.sum", command: "go", args: ["mod", "download"] },
+
+      // Rust
+      { name: "cargo", manifestFile: "Cargo.toml", lockFile: "Cargo.lock", command: "cargo", args: ["fetch"] },
+
+      // PHP
+      { name: "composer", manifestFile: "composer.json", lockFile: "composer.lock", command: "composer", args: ["install", "--no-interaction"] },
+
+      // Java (no lock files, so only install if we find these files)
+      { name: "maven", manifestFile: "pom.xml", lockFile: null, command: "mvn", args: ["dependency:resolve"] },
+      { name: "gradle", manifestFile: "build.gradle", lockFile: null, command: "gradle", args: ["dependencies", "--quiet"] },
+      { name: "gradle", manifestFile: "build.gradle.kts", lockFile: null, command: "gradle", args: ["dependencies", "--quiet"] },
+    ];
+
+    // Find all applicable package managers for this project
+    // Prioritize those with lock files, only use manifest-only as fallback
+    const pmsWithLock = packageManagers.filter((pm) => {
+      const manifestExists = existsSync(join(workingDir, pm.manifestFile));
+      if (!manifestExists) return false;
+
+      if (pm.lockFile) {
+        return existsSync(join(workingDir, pm.lockFile));
+      }
+
+      return false;
+    });
+
+    const pmsWithoutLock = packageManagers.filter((pm) => {
+      const manifestExists = existsSync(join(workingDir, pm.manifestFile));
+      if (!manifestExists) return false;
+
+      // Only include if no lock file is required
+      return pm.lockFile === null;
+    });
+
+    // Prefer package managers with lock files, otherwise use manifest-only ones
+    const applicablePMs = pmsWithLock.length > 0 ? pmsWithLock : pmsWithoutLock;
+
+    if (applicablePMs.length === 0) {
+      // No package manager files found - nothing to install
+      return { success: true };
+    }
+
+    // Install dependencies for each detected package manager
+    const results: Array<{ success: boolean; packageManager: string; error?: string }> = [];
+
+    for (const pm of applicablePMs) {
+      if (verbose) {
+        console.log(`   Installing ${pm.name} dependencies...`);
+      }
+
+      const result = await new Promise<{ success: boolean; packageManager: string; error?: string }>((resolve) => {
+        const proc = spawn(pm.command, pm.args, {
+          cwd: workingDir,
+          stdio: verbose ? "inherit" : "pipe",
+        });
+
+        let errorOutput = "";
+
+        if (!verbose && proc.stderr) {
+          proc.stderr.on("data", (data: Buffer) => {
+            errorOutput += data.toString();
+          });
+        }
+
+        proc.on("error", (error: NodeJS.ErrnoException) => {
+          resolve({
+            success: false,
+            packageManager: pm.name,
+            error: `Failed to run ${pm.name}: ${error.message}`,
+          });
+        });
+
+        proc.on("close", (code: number | null) => {
+          if (code === 0) {
+            if (verbose) {
+              console.log(`   ✅ ${pm.name} dependencies installed`);
+            }
+            resolve({
+              success: true,
+              packageManager: pm.name,
+            });
+          } else {
+            resolve({
+              success: false,
+              packageManager: pm.name,
+              error: `${pm.name} exited with code ${code}${errorOutput ? `\n${errorOutput}` : ""}`,
+            });
+          }
+        });
+      });
+
+      results.push(result);
+    }
+
+    // Consider overall success if at least one package manager succeeded
+    const anySuccess = results.some((r) => r.success);
+    const allErrors = results.filter((r) => !r.success).map((r) => r.error).join("; ");
+
+    if (anySuccess) {
+      return {
+        success: true,
+        packageManager: results.filter((r) => r.success).map((r) => r.packageManager).join(", "),
+      };
+    } else {
+      return {
+        success: false,
+        packageManager: results.map((r) => r.packageManager).join(", "),
+        error: allErrors,
+      };
+    }
   }
 }
