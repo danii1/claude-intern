@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "child_process";
-import { mkdirSync, rmSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -179,5 +179,45 @@ describe("CLI Init Command", () => {
       result.stdout.includes("Configuration folder already exists");
     expect(hasInitOutput).toBe(true);
     expect(result.exitCode).toBe(0);
+  });
+
+  test("init should add review worktree and other entries to .gitignore", () => {
+    // Create unique temp directory for this test
+    const testDir = join(tmpdir(), `cli-init-test-${Date.now()}-${Math.random().toString(36).substring(7)}`);
+    mkdirSync(testDir, { recursive: true });
+
+    try {
+      // Run init command in the test directory
+      const result = spawnSync("bun", [CLI_PATH, "init"], {
+        encoding: "utf8",
+        timeout: 5000,
+        cwd: testDir,
+      });
+
+      expect(result.status).toBe(0);
+
+      // Check that .gitignore was created or updated
+      const gitignorePath = join(testDir, ".gitignore");
+      expect(existsSync(gitignorePath)).toBe(true);
+
+      // Read .gitignore and verify all entries are present
+      const gitignoreContent = readFileSync(gitignorePath, "utf8");
+
+      // Should contain all the expected entries
+      expect(gitignoreContent).toContain(".claude-intern/.env");
+      expect(gitignoreContent).toContain(".claude-intern/.env.local");
+      expect(gitignoreContent).toContain(".claude-intern/.pid.lock");
+      expect(gitignoreContent).toContain(".claude-intern/review-worktree/");
+
+      // Should have the comment header
+      expect(gitignoreContent).toContain("Claude Intern - Keep credentials secure");
+    } finally {
+      // Clean up temp directory
+      try {
+        rmSync(testDir, { recursive: true, force: true });
+      } catch (e) {
+        // Ignore cleanup errors
+      }
+    }
   });
 });

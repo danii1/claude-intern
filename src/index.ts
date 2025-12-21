@@ -190,9 +190,9 @@ CLAUDE_CLI_PATH=claude
     process.exit(1);
   }
 
-  // Update .gitignore to exclude .claude-intern/.env and lock file
+  // Update .gitignore to exclude .claude-intern/.env, lock file, and review worktree
   const gitignorePath = join(process.cwd(), ".gitignore");
-  const gitignoreEntries = [".claude-intern/.env", ".claude-intern/.env.local", ".claude-intern/.pid.lock"];
+  const gitignoreEntries = [".claude-intern/.env", ".claude-intern/.env.local", ".claude-intern/.pid.lock", ".claude-intern/review-worktree/"];
 
   try {
     let gitignoreContent = "";
@@ -321,12 +321,117 @@ function loadEnvironment(envFile?: string): void {
   }
 }
 
-// Check if running init command before parsing
-// This needs to happen early to avoid Commander treating "init" as a task key
+// Check if running subcommands before parsing
+// This needs to happen early to avoid Commander treating them as task keys
 if (process.argv[2] === "init") {
   (async () => {
     await initializeProject();
     process.exit(0);
+  })();
+} else if (process.argv[2] === "serve") {
+  // Handle serve command - start webhook server
+  (async () => {
+    // Load environment for webhook server
+    loadEnvironment();
+
+    // Parse serve-specific options
+    const args = process.argv.slice(3);
+    let port = parseInt(process.env.WEBHOOK_PORT || "3000", 10);
+    let host = process.env.WEBHOOK_HOST || "0.0.0.0";
+
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === "--port" && args[i + 1]) {
+        port = parseInt(args[i + 1], 10);
+        i++;
+      } else if (args[i] === "--host" && args[i + 1]) {
+        host = args[i + 1];
+        i++;
+      } else if (args[i] === "--help" || args[i] === "-h") {
+        console.log("Usage: claude-intern serve [options]");
+        console.log("");
+        console.log("Start the webhook server to automatically address PR review feedback");
+        console.log("");
+        console.log("Options:");
+        console.log("  --port <port>  Port to listen on (default: 3000, or WEBHOOK_PORT env var)");
+        console.log("  --host <host>  Host to bind to (default: 0.0.0.0, or WEBHOOK_HOST env var)");
+        console.log("  -h, --help     Display this help message");
+        console.log("");
+        console.log("Environment variables:");
+        console.log("  WEBHOOK_SECRET      (required) Secret for verifying GitHub webhook signatures");
+        console.log("  WEBHOOK_PORT        Port to listen on (default: 3000)");
+        console.log("  WEBHOOK_HOST        Host to bind to (default: 0.0.0.0)");
+        console.log("  WEBHOOK_AUTO_REPLY  Set to 'true' to automatically reply to review comments");
+        console.log("  WEBHOOK_VALIDATE_IP Set to 'true' to only accept requests from GitHub IPs");
+        console.log("  WEBHOOK_DEBUG       Set to 'true' for verbose logging");
+        console.log("");
+        console.log("See docs/WEBHOOK-DEPLOYMENT.md for deployment instructions.");
+        process.exit(0);
+      }
+    }
+
+    // Import and start webhook server
+    const { startWebhookServer } = await import("./webhook-server");
+    startWebhookServer({ port, host });
+  })();
+} else if (process.argv[2] === "address-review") {
+  // Handle address-review command - manually address PR review feedback
+  (async () => {
+    // Load environment
+    loadEnvironment();
+
+    // Parse address-review options
+    const args = process.argv.slice(3);
+    let prUrl: string | undefined;
+    let noPush = false;
+    let noReply = false;
+    let verbose = false;
+
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === "--no-push") {
+        noPush = true;
+      } else if (args[i] === "--no-reply") {
+        noReply = true;
+      } else if (args[i] === "-v" || args[i] === "--verbose") {
+        verbose = true;
+      } else if (args[i] === "--help" || args[i] === "-h") {
+        console.log("Usage: claude-intern address-review <pr-url> [options]");
+        console.log("");
+        console.log("Manually address PR review feedback using Claude");
+        console.log("");
+        console.log("Arguments:");
+        console.log("  pr-url         GitHub PR URL (e.g., https://github.com/owner/repo/pull/123)");
+        console.log("");
+        console.log("Options:");
+        console.log("  --no-push      Don't push changes after fixing");
+        console.log("  --no-reply     Don't post a reply comment on the PR");
+        console.log("  -v, --verbose  Enable verbose logging");
+        console.log("  -h, --help     Display this help message");
+        console.log("");
+        console.log("Examples:");
+        console.log("  claude-intern address-review https://github.com/owner/repo/pull/123");
+        console.log("  claude-intern address-review https://github.com/owner/repo/pull/123 --no-push");
+        process.exit(0);
+      } else if (!args[i].startsWith("-")) {
+        prUrl = args[i];
+      }
+    }
+
+    if (!prUrl) {
+      console.error("❌ Error: PR URL is required");
+      console.error("");
+      console.error("Usage: claude-intern address-review <pr-url>");
+      console.error("Run 'claude-intern address-review --help' for more information.");
+      process.exit(1);
+    }
+
+    // Import and run address-review
+    const { addressReview } = await import("./lib/address-review");
+    try {
+      await addressReview(prUrl, { noPush, noReply, verbose });
+    } catch (error) {
+      console.error(`❌ Error: ${(error as Error).message}`);
+      process.exit(1);
+    }
   })();
 } else {
   // Load environment variables early (before CLI parsing)
@@ -2500,13 +2605,13 @@ process.on("uncaughtException", (error: Error) => {
 
 // Run the main function (only if not running a subcommand)
 if (require.main === module) {
-  // Check if a subcommand was run (like 'init')
+  // Check if a subcommand was run (like 'init' or 'serve')
   // Commander.js will have the command in process.argv[2]
   const command = process.argv[2];
 
   // If it's a recognized subcommand, don't run main()
-  if (command === 'init') {
-    // Subcommand was handled, don't run main
+  if (command === 'init' || command === 'serve' || command === 'address-review') {
+    // Subcommand was handled earlier, don't run main
   } else {
     // Run main for task processing
     main();

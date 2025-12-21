@@ -9,6 +9,7 @@ This is "Claude Intern" - an AI intern tool for automatically implementing JIRA 
 ## Development Commands
 
 ### Running
+
 - `bun start [TASK-KEYS...]` - Run directly with Bun (single or multiple tasks)
 - `bun run dev [TASK-KEYS...]` - Same as start (development mode)
 - `bun start --jql "JQL_QUERY"` - Run with JQL query for batch processing
@@ -20,11 +21,13 @@ This is "Claude Intern" - an AI intern tool for automatically implementing JIRA 
 ### Installation and Distribution
 
 #### NPM Installation (Recommended)
+
 - `npm install -g claude-intern` - Install globally from npm
 - `npx claude-intern [TASK-KEYS...]` - Run directly without installing
 - `npm uninstall -g claude-intern` - Remove global installation
 
 #### Local Development Setup
+
 - `git clone https://github.com/danii1/claude-intern.git` - Clone repository
 - `cd claude-intern` - Enter project directory
 - `bun install` - Install dependencies
@@ -41,12 +44,14 @@ The application follows a modular TypeScript architecture optimized for Bun runt
 ### Core Components
 
 1. **Main Entry Point** (`src/index.ts`)
+
    - Bun shebang for direct execution
    - CLI argument parsing with Commander.js (supports variadic arguments and JQL queries)
    - Environment configuration loading from multiple locations
    - Orchestrates single task or batch processing workflows: fetch → format → git → claude → commit → jira
 
 2. **JIRA Integration** (`src/lib/jira-client.ts`)
+
    - `JiraClient` class handles all JIRA API interactions
    - Supports JQL search queries for batch task discovery
    - Fetches issues, comments, attachments, and related work items
@@ -55,12 +60,14 @@ The application follows a modular TypeScript architecture optimized for Bun runt
    - Handles authentication with API tokens
 
 3. **Claude Formatting** (`src/lib/claude-formatter.ts`)
+
    - `ClaudeFormatter` static class formats JIRA data for Claude consumption
    - Converts HTML and Atlassian Document Format to Markdown
    - Creates structured prompts with task context, related issues, and linked resources
    - Generates clarity assessment prompts for feasibility checking
 
 4. **Utilities** (`src/lib/utils.ts`)
+
    - Git operations for branch creation and commit automation
    - Various helper functions for file handling and process management
 
@@ -107,14 +114,15 @@ For multiple tasks, the tool processes them sequentially with enhanced error han
   - Status filtering: `status = "To Do"`
   - Project scoping: `project = "My Project"`
   - User assignments: `assignee = currentUser()`
-  
 - **Error Handling**: Robust error isolation and reporting
+
   - Failed tasks don't block remaining work
   - Detailed error messages for each failure
   - Continue-on-error strategy for batch operations
   - Comprehensive final summary with success/failure breakdown
 
 - **File Management**: Smart output file handling
+
   - Dynamic naming prevents file conflicts
   - Separate files for each task enable parallel review
   - Consistent naming pattern: `{base-name}-{task-key-lowercase}.md`
@@ -127,18 +135,23 @@ For multiple tasks, the tool processes them sequentially with enhanced error han
 ### Environment Configuration
 
 #### Initialization Command
+
 The tool provides an `init` command to create project-specific configuration:
+
 ```bash
 claude-intern init
 ```
+
 This creates a `.claude-intern` folder with:
+
 - `.env` - Project-specific configuration file with JIRA credentials
 - `.env.sample` - Template with all configuration options
 - `settings.json` - Per-project settings (PR status transitions, etc.)
 
-**Automatic .gitignore Protection:** The `init` command automatically adds `.claude-intern/.env` and `.claude-intern/.env.local` to the project's `.gitignore` file (creating it if needed) to prevent credential leaks to version control.
+**Automatic .gitignore Protection:** The `init` command automatically adds `.claude-intern/.env`, `.claude-intern/.env.local`, `.claude-intern/.pid.lock`, and `.claude-intern/review-worktree/` to the project's `.gitignore` file (creating it if needed) to prevent credential leaks and temporary files from being committed to version control.
 
 #### Per-Project Settings (settings.json)
+
 The `settings.json` file in `.claude-intern/` allows configuring project-specific behavior:
 
 ```json
@@ -159,6 +172,7 @@ The `settings.json` file in `.claude-intern/` allows configuring project-specifi
 ```
 
 **Status Transition Configuration**:
+
 - `inProgressStatus`: JIRA status to transition to when starting task implementation (e.g., "In Progress", "In Development", "Implementing")
 - `todoStatus`: JIRA status to transition to when implementation fails or is incomplete (e.g., "To Do", "Backlog", "Open")
 - `prStatus`: JIRA status to transition to after PR creation (e.g., "In Review", "Code Review", "Ready for Review")
@@ -166,7 +180,9 @@ The `settings.json` file in `.claude-intern/` allows configuring project-specifi
 **Note**: Each project key can have its own status configurations. If not configured for a specific project, no status transitions will occur. This allows different JIRA projects to have different workflow statuses.
 
 #### Configuration Loading Priority
+
 The tool loads `.env` files from multiple locations in priority order:
+
 1. Custom path specified with `--env-file`
 2. **Project-specific** (`.claude-intern/.env` - recommended for per-project configuration)
 3. Current working directory (`.env`)
@@ -174,11 +190,13 @@ The tool loads `.env` files from multiple locations in priority order:
 5. Tool installation directory
 
 Required environment variables:
+
 - `JIRA_BASE_URL` - Your JIRA instance URL
 - `JIRA_EMAIL` - Your JIRA email address
 - `JIRA_API_TOKEN` - JIRA API token for authentication
 
 Optional environment variables for PR creation:
+
 - **Option 1: GitHub Personal Access Token** (for individual users)
   - `GITHUB_TOKEN` - GitHub personal access token for creating PRs
     - Classic token: requires `repo` scope
@@ -191,6 +209,7 @@ Optional environment variables for PR creation:
 - `BITBUCKET_TOKEN` - Bitbucket app password for creating PRs (requires `Repositories: Write`)
 
 Optional environment variables for workflow automation:
+
 - `CLAUDE_INTERN_OUTPUT_DIR` - Base directory for task files and attachments (default: `/tmp/claude-intern-tasks`)
 
 **Note**: JIRA PR status transitions are configured per-project in `settings.json`, not as environment variables.
@@ -200,7 +219,7 @@ Optional environment variables for workflow automation:
 - **Initialization**: `claude-intern init` to create project-specific configuration
   - Creates `.claude-intern` folder with `.env` and `.env.sample`
   - Provides guided setup for new projects
-  - Automatically adds `.claude-intern/.env` to `.gitignore` for security
+  - Automatically adds `.claude-intern/.env`, `.claude-intern/.pid.lock`, and `.claude-intern/review-worktree/` to `.gitignore` for security
 - **Batch Processing**: Process multiple tasks sequentially
   - Multiple task keys: `claude-intern PROJ-123 PROJ-124 PROJ-125`
   - JQL queries: `--jql "project = PROJ AND status = 'To Do'"`
@@ -222,19 +241,23 @@ Optional environment variables for workflow automation:
 ## Important Implementation Notes
 
 ### JIRA API Integration
+
 - Uses JIRA REST API v3 with comprehensive error handling
 - Supports both rendered HTML and Atlassian Document Format content
 - Handles authentication edge cases and API token formats
 - Fetches complete context including subtasks, parent tasks, epics, and linked issues
 
 ### Claude Integration
+
 - Spawns Claude Code as subprocess with enhanced permissions (`-p --dangerously-skip-permissions`)
 - Real-time output streaming to user while capturing for JIRA posting
 - Detects completion status and max-turns errors
 - Posts rich-text implementation summaries back to JIRA using Atlassian Document Format
 
 ### Output File Structure
+
 Each task creates a dedicated directory with all related files:
+
 ```
 {CLAUDE_INTERN_OUTPUT_DIR}/{task-key}/
 ├── task-details.md                         # Formatted task for Claude implementation
@@ -246,6 +269,7 @@ Each task creates a dedicated directory with all related files:
     ├── image1.png
     └── document.pdf
 ```
+
 - Default output directory: `/tmp/claude-intern-tasks/`
 - Customizable via `CLAUDE_INTERN_OUTPUT_DIR` environment variable
 - All assessment and implementation files saved for debugging
@@ -255,12 +279,14 @@ Each task creates a dedicated directory with all related files:
 - Assessment input uses temporary file (cleaned up automatically)
 
 ### Git Automation
+
 - Creates feature branches with consistent naming: `feature/{task-key-lowercase}`
 - Handles existing branch scenarios gracefully
 - Automated commit messages include task context
 - Integrates with Claude Code workflow for seamless development
 
 ### Error Handling and Validation
+
 - Comprehensive environment validation
 - JIRA API authentication testing
 - Claude CLI path resolution across platforms
@@ -269,6 +295,7 @@ Each task creates a dedicated directory with all related files:
 ## Runtime and Dependencies
 
 ### Development & Distribution Strategy
+
 - **Development**: Bun runtime for fast TypeScript execution without compilation
 - **Distribution**: Bun bundler creates Node.js-compatible output for npm publishing
 - **NPM Compatibility**: Built files run on standard Node.js for broad compatibility
@@ -280,18 +307,21 @@ Each task creates a dedicated directory with all related files:
 The project uses Bun's native test runner for automated testing:
 
 **Running Tests:**
+
 - `bun test` - Run all tests across the test suite
 - `bun test tests/lock-manager.test.ts` - Run specific test file
 - `bun test --watch` - Run tests in watch mode
 
 **Test Structure:**
+
 - Tests are located in the `tests/` directory
 - Uses Bun's native `bun:test` API with `describe()`, `test()`, and `expect()`
 - Tests use isolated temporary directories to enable parallel execution
-- All 35 tests (8 settings, 6 lock manager, 21 CLI) pass consistently
+- All tests across pass consistently
 
 **Writing New Tests:**
 When adding tests, use Bun's native test API:
+
 ```typescript
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 
@@ -303,6 +333,7 @@ describe("MyFeature", () => {
 ```
 
 **Test Isolation:**
+
 - Use temporary directories for tests that create files or acquire locks
 - Use `beforeEach()` to set up isolated state
 - Use `afterEach()` to clean up resources
@@ -313,6 +344,7 @@ describe("MyFeature", () => {
 This tool can be installed globally via npm or used directly with npx from any project directory:
 
 ### Installation Options
+
 ```bash
 # Install globally
 npm install -g claude-intern
@@ -322,6 +354,7 @@ npx claude-intern PROJ-123
 ```
 
 ### Project Setup
+
 ```bash
 # Initialize project-specific configuration
 claude-intern init
@@ -331,6 +364,7 @@ claude-intern init
 ```
 
 ### Single Task Processing
+
 ```bash
 # Global installation
 claude-intern PROJ-123  # Process single task
@@ -340,6 +374,7 @@ npx claude-intern PROJ-123  # Process single task
 ```
 
 ### Multiple Task Processing
+
 ```bash
 # Process multiple specific tasks
 claude-intern PROJ-123 PROJ-124 PROJ-125
@@ -356,6 +391,7 @@ claude-intern --jql "project = PROJ AND type = Bug AND created >= -7d"
 ```
 
 ### Batch Processing Options
+
 ```bash
 # Skip Claude execution for batch formatting only
 claude-intern --jql "project = PROJ AND status = 'To Do'" --no-claude
@@ -374,6 +410,7 @@ claude-intern PROJ-101 PROJ-102 PROJ-103 --skip-clarity-check --create-pr
 ```
 
 ### Advanced Batch Processing Scenarios
+
 ```bash
 # Process all assigned frontend bugs in current sprint
 claude-intern --jql "assignee = currentUser() AND labels = 'frontend' AND type = Bug AND sprint in openSprints()"
@@ -389,6 +426,7 @@ claude-intern --jql "status = 'Ready for Development' AND \"Story Points\" <= 5"
 ```
 
 ### Testing and Development Options
+
 ```bash
 # Test workflow without posting to JIRA (all implementation locally)
 claude-intern PROJ-123 --skip-jira-comments
@@ -404,3 +442,154 @@ claude-intern PROJ-123 --skip-jira-comments --skip-clarity-check
 ```
 
 The tool will use JIRA credentials from `.env` files (prioritizing `.claude-intern/.env` for project-specific configuration) and execute Claude in the current working directory, making it flexible for use across multiple projects.
+
+## Webhook Server for Automated PR Review Handling
+
+Claude Intern includes a webhook server that can automatically address PR review feedback when reviewers request changes.
+
+### How It Works
+
+1. **GitHub sends webhook** when a reviewer requests changes on a PR
+2. **Webhook server receives** the event and verifies the signature
+3. **Checks for bot mention** - only processes reviews that mention the bot (e.g., `@your-bot-name`)
+4. **Queues the review** - adds review to sequential processing queue to prevent race conditions
+5. **Prepares worktree** - switches the single reusable worktree in `.claude-intern/review-worktree/` to the PR branch
+6. **Fetches review comments** from the GitHub API
+7. **Formats them for Claude** with file context and diff hunks
+8. **Runs Claude** to address the feedback in the isolated worktree
+9. **Commits and pushes** the fixes to the PR branch
+10. **Optionally replies** to review comments confirming the fixes
+
+### Queue and Worktree Isolation
+
+The webhook server uses **p-queue** for sequential processing and a **single reusable git worktree** for isolation:
+
+- **Sequential Queue**: Reviews are processed one at a time (concurrency: 1) to prevent race conditions when multiple reviews come in simultaneously
+- **Single Reusable Worktree**: All PR reviews share one worktree at `.claude-intern/review-worktree/` that switches branches as needed
+- **No Cleanup Needed**: The worktree persists and is reused, avoiding the overhead of creating/removing worktrees for each review
+- **Branch Switching**: The worktree automatically switches to the PR branch for each review, fetching and pulling the latest changes
+- **No Main Branch Conflicts**: Regular JIRA task processing continues in the main working directory, while PR reviews work in the isolated worktree
+
+**Important:** The webhook server **only processes reviews that mention the bot**. Reviewers must include `@your-bot-name` in either the review body or in one of the review comments to trigger automatic processing. This prevents the bot from responding to all "changes requested" reviews and gives reviewers control over when automation should run.
+
+### Starting the Webhook Server
+
+```bash
+# Start with default settings (port 3000)
+claude-intern serve
+
+# Custom port and host
+claude-intern serve --port 8080 --host 127.0.0.1
+
+# Show help
+claude-intern serve --help
+```
+
+### Manual Review Handling
+
+You can also manually address PR review feedback without running the webhook server:
+
+```bash
+# Address review feedback for a specific PR
+claude-intern address-review https://github.com/owner/repo/pull/123
+
+# Don't push changes (make fixes locally only)
+claude-intern address-review https://github.com/owner/repo/pull/123 --no-push
+
+# Don't post a reply comment on the PR
+claude-intern address-review https://github.com/owner/repo/pull/123 --no-reply
+
+# Verbose output
+claude-intern address-review https://github.com/owner/repo/pull/123 -v
+```
+
+The command will:
+
+1. Parse the PR URL to extract owner/repo/number
+2. Find the latest "changes requested" review
+3. Fetch all review comments
+4. Checkout the PR branch locally
+5. Run Claude to address the feedback
+6. Commit and push the changes (unless `--no-push`)
+7. Post a summary comment (unless `--no-reply`)
+
+### Webhook Server Environment Variables
+
+```bash
+# Required
+WEBHOOK_SECRET=your-webhook-secret     # Secret for GitHub signature verification
+
+# Optional
+WEBHOOK_PORT=3000                       # Port to listen on (default: 3000)
+WEBHOOK_HOST=0.0.0.0                    # Host to bind to (default: 0.0.0.0)
+WEBHOOK_AUTO_REPLY=true                 # Auto-reply to addressed comments
+WEBHOOK_VALIDATE_IP=true                # Only accept requests from GitHub IPs
+WEBHOOK_DEBUG=true                      # Enable verbose logging
+```
+
+### Bot Mention Detection
+
+The webhook server automatically detects the bot's username from the GitHub App authentication and only processes reviews that mention it:
+
+- **Automatic Detection**: The bot username is retrieved from the GitHub API using the authenticated app credentials
+- **Mention Format**: Reviewers must use `@bot-name` in either the review body or review comments
+- **Case Insensitive**: Mentions are matched case-insensitively (e.g., `@Bot-Name` or `@bot-name`)
+- **Personal Access Tokens**: If using a personal access token instead of GitHub App auth, the bot will not be able to detect its username and will process all reviews (less selective)
+
+**Example Usage:**
+
+When requesting changes on a PR, reviewers can trigger the bot by including a mention:
+
+```markdown
+These changes look good, but there are a few issues:
+@my-bot-app please address the following feedback...
+```
+
+Or in individual review comments:
+```markdown
+@my-bot-app This function needs better error handling
+```
+
+### Security
+
+The webhook server implements multiple security layers:
+
+1. **Signature Verification**: Every request must have a valid `X-Hub-Signature-256` header
+2. **Bot Mention Requirement**: Only processes reviews that explicitly mention the bot
+3. **Rate Limiting**: 30 requests per minute per IP (configurable)
+4. **IP Allowlisting**: Optional validation against GitHub's webhook IP ranges
+5. **HTTPS Required**: Use a reverse proxy or tunnel for production
+
+### Deployment Options
+
+See `docs/WEBHOOK-DEPLOYMENT.md` for detailed deployment instructions including:
+
+- **Cloudflare Tunnel** (recommended) - Zero open ports
+- **Tailscale Funnel** - Simple if you use Tailscale
+- **Reverse Proxy** (Caddy/nginx) - Full control
+- **Systemd service** configuration
+
+### GitHub App Configuration for Webhooks
+
+Add these permissions to your GitHub App:
+
+- **Pull request review comments**: Read and write
+
+Subscribe to these events:
+
+- Pull request review
+- Pull request review comment
+
+### Architecture
+
+```
+src/
+├── webhook-server.ts          # Server entry point and CLI
+├── lib/
+│   ├── webhook-handler.ts     # Signature verification, event routing
+│   ├── github-reviews.ts      # GitHub review API client
+│   ├── review-formatter.ts    # Format reviews for Claude prompts
+│   └── address-review.ts      # Manual address-review command logic
+└── types/
+    └── github-webhooks.ts     # TypeScript interfaces for webhook events
+```

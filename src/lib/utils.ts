@@ -1,5 +1,6 @@
 import { spawn } from "child_process";
-import { existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync, rmSync } from "fs";
+import { join } from "path";
 
 export class Utils {
   /**
@@ -149,16 +150,20 @@ export class Utils {
    */
   static async executeGitCommand(
     args: string[],
-    options?: { verbose?: boolean }
+    options?: { verbose?: boolean; cwd?: string }
   ): Promise<{ success: boolean; output: string; error?: string }> {
     const verbose = options?.verbose ?? false;
+    const cwd = options?.cwd;
 
     if (verbose) {
-      console.log(`🔧 Executing: git ${args.join(" ")}`);
+      console.log(`🔧 Executing: git ${args.join(" ")}${cwd ? ` (in ${cwd})` : ""}`);
     }
 
     return new Promise((resolve) => {
-      const git = spawn("git", args, { stdio: ["pipe", "pipe", "pipe"] });
+      const git = spawn("git", args, {
+        stdio: ["pipe", "pipe", "pipe"],
+        cwd: cwd || process.cwd()
+      });
 
       let output = "";
       let error = "";
@@ -654,5 +659,393 @@ export class Utils {
         message: `Git operation failed: ${(error as Error).message}`,
       };
     }
+  }
+
+  /**
+   * Create a git worktree for PR review work.
+   * Creates worktrees in `.claude-intern/review-worktrees/` to isolate PR work.
+   */
+  static async createReviewWorktree(
+    owner: string,
+    repo: string,
+    branch: string,
+    options?: { verbose?: boolean }
+  ): Promise<{ success: boolean; path?: string; error?: string }> {
+    const verbose = options?.verbose ?? false;
+
+    try {
+      // Create worktrees directory in .claude-intern folder
+      const reviewsDir = join(process.cwd(), ".claude-intern", "review-worktrees");
+      Utils.ensureDirectoryExists(reviewsDir);
+
+      // Sanitize names for directory path
+      const sanitizedOwner = Utils.sanitizeFilename(owner);
+      const sanitizedRepo = Utils.sanitizeFilename(repo);
+      const sanitizedBranch = Utils.sanitizeFilename(branch);
+      const worktreePath = join(
+        reviewsDir,
+        `${sanitizedOwner}-${sanitizedRepo}-${sanitizedBranch}`
+      );
+
+      if (verbose) {
+        console.log(`\n📂 Creating review worktree:`);
+        console.log(`   Owner: ${owner}`);
+        console.log(`   Repo: ${repo}`);
+        console.log(`   Branch: ${branch}`);
+        console.log(`   Path: ${worktreePath}`);
+      }
+
+      // Remove existing worktree if it exists
+      if (existsSync(worktreePath)) {
+        if (verbose) {
+          console.log(`   Removing existing worktree...`);
+        }
+
+        // Try to remove the worktree via git first
+        const removeResult = await Utils.executeGitCommand(
+          ["worktree", "remove", worktreePath, "--force"],
+          { verbose }
+        );
+
+        // If git remove fails, forcefully delete the directory
+        if (!removeResult.success) {
+          if (verbose) {
+            console.log(`   Git worktree remove failed, deleting directory...`);
+          }
+          try {
+            rmSync(worktreePath, { recursive: true, force: true });
+          } catch (error) {
+            // Ignore errors, will try to create anyway
+          }
+        }
+      }
+
+      // Fetch latest from origin to ensure branch is up to date
+      if (verbose) {
+        console.log(`   Fetching latest from origin...`);
+      }
+      await Utils.executeGitCommand(["fetch", "origin"], { verbose });
+
+      // Create the worktree
+      if (verbose) {
+        console.log(`   Creating worktree...`);
+      }
+
+      const createResult = await Utils.executeGitCommand(
+        ["worktree", "add", worktreePath, branch],
+        { verbose }
+      );
+
+      if (!createResult.success) {
+        // Try creating with origin/ prefix
+        if (verbose) {
+          console.log(`   Retrying with origin/${branch}...`);
+        }
+
+        const retryResult = await Utils.executeGitCommand(
+          ["worktree", "add", worktreePath, `origin/${branch}`],
+          { verbose }
+        );
+
+        if (!retryResult.success) {
+          return {
+            success: false,
+            error: `Failed to create worktree: ${retryResult.error || createResult.error}`,
+          };
+        }
+      }
+
+      if (verbose) {
+        console.log(`✅ Worktree created successfully`);
+      }
+
+      return {
+        success: true,
+        path: worktreePath,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: `Worktree creation failed: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Remove a git worktree and clean up its directory.
+   */
+  static async removeReviewWorktree(
+    worktreePath: string,
+    options?: { verbose?: boolean }
+  ): Promise<{ success: boolean; error?: string }> {
+    const verbose = options?.verbose ?? false;
+
+    try {
+      if (!existsSync(worktreePath)) {
+        if (verbose) {
+          console.log(`⏭️  Worktree does not exist: ${worktreePath}`);
+        }
+        return { success: true };
+      }
+
+      if (verbose) {
+        console.log(`\n🗑️  Removing worktree: ${worktreePath}`);
+      }
+
+      // Try to remove via git first
+      const removeResult = await Utils.executeGitCommand(
+        ["worktree", "remove", worktreePath, "--force"],
+        { verbose }
+      );
+
+      if (!removeResult.success) {
+        if (verbose) {
+          console.log(`   Git worktree remove failed, deleting directory...`);
+        }
+        // Forcefully delete the directory
+        rmSync(worktreePath, { recursive: true, force: true });
+      }
+
+      if (verbose) {
+        console.log(`✅ Worktree removed successfully`);
+      }
+
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: `Worktree removal failed: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * List all review worktrees.
+   */
+  static async listReviewWorktrees(options?: {
+    verbose?: boolean;
+  }): Promise<string[]> {
+    const verbose = options?.verbose ?? false;
+    const reviewsDir = join(process.cwd(), ".claude-intern", "review-worktrees");
+
+    if (!existsSync(reviewsDir)) {
+      return [];
+    }
+
+    try {
+      const { readdir } = await import("fs/promises");
+      const entries = await readdir(reviewsDir, { withFileTypes: true });
+      const worktrees = entries
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => join(reviewsDir, entry.name));
+
+      if (verbose) {
+        console.log(`\n📋 Found ${worktrees.length} review worktree(s):`);
+        worktrees.forEach((path, index) => {
+          console.log(`   ${index + 1}. ${path}`);
+        });
+      }
+
+      return worktrees;
+    } catch (error) {
+      if (verbose) {
+        console.error(`Failed to list worktrees: ${(error as Error).message}`);
+      }
+      return [];
+    }
+  }
+
+  /**
+   * Clean up old review worktrees.
+   */
+  static async cleanupReviewWorktrees(options?: {
+    verbose?: boolean;
+    olderThanDays?: number;
+  }): Promise<{ success: boolean; cleaned: number; errors: number }> {
+    const verbose = options?.verbose ?? false;
+    const olderThanDays = options?.olderThanDays ?? 7;
+
+    const worktrees = await Utils.listReviewWorktrees({ verbose });
+    let cleaned = 0;
+    let errors = 0;
+
+    if (worktrees.length === 0) {
+      if (verbose) {
+        console.log(`\n🧹 No worktrees to clean up`);
+      }
+      return { success: true, cleaned: 0, errors: 0 };
+    }
+
+    if (verbose) {
+      console.log(`\n🧹 Cleaning up worktrees older than ${olderThanDays} days...`);
+    }
+
+    const { stat } = await import("fs/promises");
+    const cutoffTime = Date.now() - olderThanDays * 24 * 60 * 60 * 1000;
+
+    for (const worktreePath of worktrees) {
+      try {
+        const stats = await stat(worktreePath);
+        const modifiedTime = stats.mtime.getTime();
+
+        if (modifiedTime < cutoffTime) {
+          if (verbose) {
+            const ageInDays = Math.floor((Date.now() - modifiedTime) / (24 * 60 * 60 * 1000));
+            console.log(`   Removing worktree (${ageInDays} days old): ${worktreePath}`);
+          }
+
+          const result = await Utils.removeReviewWorktree(worktreePath, {
+            verbose: false,
+          });
+
+          if (result.success) {
+            cleaned++;
+          } else {
+            errors++;
+            if (verbose) {
+              console.error(`   Failed to remove: ${result.error}`);
+            }
+          }
+        }
+      } catch (error) {
+        errors++;
+        if (verbose) {
+          console.error(
+            `   Error checking worktree ${worktreePath}: ${(error as Error).message}`
+          );
+        }
+      }
+    }
+
+    if (verbose) {
+      console.log(`\n✅ Cleanup complete: ${cleaned} removed, ${errors} errors`);
+    }
+
+    return { success: errors === 0, cleaned, errors };
+  }
+
+  /**
+   * Prepare the single review worktree for webhook processing.
+   * Reuses `.claude-intern/review-worktree/` (singular) and switches branches.
+   * Much more efficient than creating/removing worktrees for each review.
+   */
+  static async prepareReviewWorktree(
+    branch: string,
+    options?: { verbose?: boolean }
+  ): Promise<{ success: boolean; path?: string; error?: string }> {
+    const verbose = options?.verbose ?? false;
+
+    try {
+      // Single worktree path - reused across all webhook reviews
+      const worktreePath = Utils.getReviewWorktreePath();
+
+      if (verbose) {
+        console.log(`\n📂 Preparing review worktree for branch: ${branch}`);
+      }
+
+      // Fetch latest from origin
+      if (verbose) {
+        console.log(`   Fetching from origin...`);
+      }
+      await Utils.executeGitCommand(["fetch", "origin"], { verbose });
+
+      // Check if worktree exists
+      const worktreeExists = existsSync(worktreePath);
+
+      if (worktreeExists) {
+        // Worktree exists - switch branch
+        if (verbose) {
+          console.log(`   Switching to branch ${branch}...`);
+        }
+
+        // Try to switch to the branch
+        let switchResult = await Utils.executeGitCommand(
+          ["checkout", branch],
+          { verbose, cwd: worktreePath }
+        );
+
+        if (!switchResult.success) {
+          // Try with origin/ prefix and force create local branch
+          switchResult = await Utils.executeGitCommand(
+            ["checkout", "-B", branch, `origin/${branch}`],
+            { verbose, cwd: worktreePath }
+          );
+        }
+
+        if (switchResult.success) {
+          // Pull latest changes
+          if (verbose) {
+            console.log(`   Pulling latest changes...`);
+          }
+          await Utils.executeGitCommand(
+            ["pull", "origin", branch, "--ff-only"],
+            { verbose, cwd: worktreePath }
+          );
+
+          if (verbose) {
+            console.log(`✅ Switched to branch ${branch}`);
+          }
+          return { success: true, path: worktreePath };
+        }
+
+        // Failed to switch - remove and recreate worktree
+        if (verbose) {
+          console.log(`   Failed to switch, removing worktree...`);
+        }
+        await Utils.executeGitCommand(
+          ["worktree", "remove", worktreePath, "--force"],
+          { verbose }
+        );
+        // Fallback cleanup
+        try {
+          rmSync(worktreePath, { recursive: true, force: true });
+        } catch (e) {
+          // Ignore
+        }
+      }
+
+      // Create new worktree
+      if (verbose) {
+        console.log(`   Creating worktree...`);
+      }
+
+      let createResult = await Utils.executeGitCommand(
+        ["worktree", "add", worktreePath, branch],
+        { verbose }
+      );
+
+      if (!createResult.success) {
+        // Try with origin/ prefix
+        createResult = await Utils.executeGitCommand(
+          ["worktree", "add", worktreePath, `origin/${branch}`],
+          { verbose }
+        );
+      }
+
+      if (!createResult.success) {
+        return {
+          success: false,
+          error: `Failed to create worktree: ${createResult.error}`,
+        };
+      }
+
+      if (verbose) {
+        console.log(`✅ Worktree ready at ${worktreePath}`);
+      }
+
+      return { success: true, path: worktreePath };
+    } catch (error) {
+      return {
+        success: false,
+        error: `Worktree preparation failed: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Get the path to the single review worktree.
+   */
+  static getReviewWorktreePath(): string {
+    return join(process.cwd(), ".claude-intern", "review-worktree");
   }
 }
