@@ -476,7 +476,7 @@ The webhook server uses **p-queue** for sequential processing and a **single reu
 The worktree preparation automatically detects and installs dependencies for multiple languages:
 
 - **JavaScript/TypeScript**: bun, pnpm, yarn, npm (requires lock file)
-- **Python**: poetry, pipenv, pip (requirements.txt)
+- **Python**: uv, poetry, pipenv, pip (requirements.txt)
 - **Ruby**: bundle (Gemfile)
 - **Go**: go mod
 - **Rust**: cargo

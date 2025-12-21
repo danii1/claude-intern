@@ -1095,6 +1095,7 @@ export class Utils {
       { name: "npm", manifestFile: "package.json", lockFile: "package-lock.json", command: "npm", args: ["ci"] },
 
       // Python
+      { name: "uv", manifestFile: "pyproject.toml", lockFile: "uv.lock", command: "uv", args: ["sync"] },
       { name: "poetry", manifestFile: "pyproject.toml", lockFile: "poetry.lock", command: "poetry", args: ["install", "--no-root"] },
       { name: "pip", manifestFile: "requirements.txt", lockFile: null, command: "pip", args: ["install", "-r", "requirements.txt"] },
       { name: "pipenv", manifestFile: "Pipfile", lockFile: "Pipfile.lock", command: "pipenv", args: ["install", "--deploy"] },
