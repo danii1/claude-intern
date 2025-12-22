@@ -69,34 +69,8 @@ async function getLatestChangesRequestedReview(
   reviewer: string;
   body: string | null;
 } | null> {
-  // Fetch all reviews for the PR
-  const token = process.env.GITHUB_TOKEN;
-  if (!token) {
-    throw new Error("GITHUB_TOKEN environment variable is required");
-  }
-
-  const response = await fetch(
-    `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}/reviews`,
-    {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/vnd.github.v3+json",
-        "User-Agent": "claude-intern",
-      },
-    }
-  );
-
-  if (!response.ok) {
-    throw new Error(`Failed to fetch reviews: ${response.statusText}`);
-  }
-
-  const reviews = (await response.json()) as Array<{
-    id: number;
-    state: string;
-    body: string | null;
-    user: { login: string };
-    submitted_at: string;
-  }>;
+  // Fetch all reviews for the PR using the client
+  const reviews = await client.getReviews(owner, repo, prNumber);
 
   // Find the latest "changes_requested" review
   const changesRequestedReviews = reviews
@@ -187,38 +161,20 @@ async function runClaude(
  * Post a reply comment on the PR.
  */
 async function postReplyComment(
+  client: GitHubReviewsClient,
   owner: string,
   repo: string,
   prNumber: number,
   commentsAddressed: number,
   totalComments: number
 ): Promise<void> {
-  const token = process.env.GITHUB_TOKEN;
-  if (!token) {
-    console.warn("⚠️  No GITHUB_TOKEN for posting reply");
-    return;
-  }
-
   const body = formatReviewSummaryReply(commentsAddressed, totalComments);
 
-  const response = await fetch(
-    `https://api.github.com/repos/${owner}/${repo}/issues/${prNumber}/comments`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/vnd.github.v3+json",
-        "Content-Type": "application/json",
-        "User-Agent": "claude-intern",
-      },
-      body: JSON.stringify({ body }),
-    }
-  );
-
-  if (response.ok) {
+  try {
+    await client.postPullRequestComment(owner, repo, prNumber, body);
     console.log("✅ Posted review summary reply");
-  } else {
-    console.warn(`⚠️  Failed to post reply: ${response.statusText}`);
+  } catch (error) {
+    console.warn(`⚠️  Failed to post reply: ${(error as Error).message}`);
   }
 }
 
@@ -370,6 +326,7 @@ export async function addressReview(
   if (!noReply && !noPush) {
     console.log("\n💬 Posting review summary reply...");
     await postReplyComment(
+      githubClient,
       owner,
       repo,
       prNumber,

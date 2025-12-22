@@ -193,6 +193,34 @@ export class GitHubReviewsClient {
   }
 
   /**
+   * Get all reviews for a pull request.
+   */
+  async getReviews(
+    owner: string,
+    repo: string,
+    prNumber: number
+  ): Promise<Array<{
+    id: number;
+    state: string;
+    body: string | null;
+    user: { login: string };
+    submitted_at: string;
+  }>> {
+    return this.apiRequest<Array<{
+      id: number;
+      state: string;
+      body: string | null;
+      user: { login: string };
+      submitted_at: string;
+    }>>(
+      "GET",
+      `/repos/${owner}/${repo}/pulls/${prNumber}/reviews`,
+      owner,
+      repo
+    );
+  }
+
+  /**
    * Get review comments for a specific review.
    */
   async getReviewComments(
@@ -254,6 +282,24 @@ export class GitHubReviewsClient {
         line,
         side,
       }
+    );
+  }
+
+  /**
+   * Post a general comment on a pull request (issue comment, not review comment).
+   */
+  async postPullRequestComment(
+    owner: string,
+    repo: string,
+    prNumber: number,
+    body: string
+  ): Promise<void> {
+    await this.apiRequest(
+      "POST",
+      `/repos/${owner}/${repo}/issues/${prNumber}/comments`,
+      owner,
+      repo,
+      { body }
     );
   }
 
