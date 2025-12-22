@@ -6,6 +6,7 @@
 
 import { spawn, type ChildProcess } from "child_process";
 import { GitHubReviewsClient } from "./github-reviews";
+import { GitHubAppAuth } from "./github-app-auth";
 import {
   formatReviewPrompt,
   formatReviewSummaryReply,
@@ -260,6 +261,25 @@ export async function addressReview(
   console.log(`   Repository: ${owner}/${repo}`);
   console.log(`   PR #${prNumber}`);
 
+  // Get GitHub App author info if available (for commit attribution)
+  let gitAuthor: { name: string; email: string } | undefined;
+  if (!process.env.GITHUB_TOKEN) {
+    const githubAppAuth = GitHubAppAuth.fromEnvironment();
+    if (githubAppAuth) {
+      try {
+        gitAuthor = await githubAppAuth.getGitAuthor();
+        if (verbose) {
+          console.log(`🤖 Commits will be authored by: ${gitAuthor.name}`);
+        }
+      } catch (error) {
+        if (verbose) {
+          console.warn(`⚠️  Could not get GitHub App author info: ${(error as Error).message}`);
+          console.log("   Commits will use local git config instead.");
+        }
+      }
+    }
+  }
+
   // Initialize GitHub client
   const githubClient = new GitHubReviewsClient();
 
@@ -439,7 +459,7 @@ export async function addressReview(
     const commitResult = await Utils.commitChanges(
       `PR-${prNumber}`,
       `Address review feedback from ${feedback.reviewer}`,
-      { verbose }
+      { verbose, author: gitAuthor }
     );
 
     if (!commitResult.success) {
