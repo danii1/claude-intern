@@ -377,15 +377,15 @@ export async function addressReview(
 
   console.log("\n✅ Claude completed successfully");
 
-  // Check if there are uncommitted changes
-  const hasUncommitted = await Utils.hasUncommittedChanges();
-
-  // Check if there are unpushed commits (in case Claude committed despite instructions)
+  // Check if there are unpushed commits (Claude should have committed)
   const unpushedResult = await Utils.executeGitCommand(
     ["log", `origin/${pr.head.ref}..HEAD`, "--oneline"],
     { verbose }
   );
   const hasUnpushed = unpushedResult.success && unpushedResult.output.trim().length > 0;
+
+  // Check if there are uncommitted changes (fallback if Claude didn't commit)
+  const hasUncommitted = await Utils.hasUncommittedChanges();
 
   if (!hasUncommitted && !hasUnpushed) {
     console.log("\n⚠️  No changes were made by Claude");
@@ -393,9 +393,11 @@ export async function addressReview(
     return;
   }
 
-  // Commit changes if there are uncommitted files
-  if (hasUncommitted) {
-    console.log("\n📝 Committing changes...");
+  // Prefer Claude's commits, but handle uncommitted changes as fallback
+  if (hasUnpushed) {
+    console.log("\n✅ Changes committed by Claude");
+  } else if (hasUncommitted) {
+    console.log("\n📝 Claude left changes uncommitted, committing now...");
     const commitResult = await Utils.commitChanges(
       `PR-${prNumber}`,
       `Address review feedback from ${feedback.reviewer}`,
@@ -408,8 +410,6 @@ export async function addressReview(
     }
 
     console.log("✅ Changes committed successfully");
-  } else if (hasUnpushed) {
-    console.log("\n📝 Changes already committed by Claude");
   }
 
   // Push changes if requested

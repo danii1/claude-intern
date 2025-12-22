@@ -69,9 +69,9 @@ export function formatReviewPrompt(feedback: ProcessedReviewFeedback): string {
   lines.push("5. Run any relevant tests to verify your changes");
   lines.push("");
   lines.push("**IMPORTANT:**");
-  lines.push("- Make your code changes but do NOT commit or push anything");
-  lines.push("- Leave all changes uncommitted - they will be committed and pushed automatically");
-  lines.push("- Just make the file modifications and you're done");
+  lines.push("- After making your changes, commit them with a descriptive message");
+  lines.push("- Your commit message should summarize what changes you made to address the feedback");
+  lines.push("- Do NOT push to the remote - that will be done automatically");
 
   return lines.join("\n");
 }

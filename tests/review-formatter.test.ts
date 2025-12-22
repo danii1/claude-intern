@@ -132,8 +132,8 @@ describe("Review Formatter", () => {
       const prompt = formatReviewPrompt(baseFeedback);
 
       expect(prompt).toContain("Instructions");
-      expect(prompt).toContain("do NOT commit or push");
-      expect(prompt).toContain("Leave all changes uncommitted");
+      expect(prompt).toContain("commit them with a descriptive message");
+      expect(prompt).toContain("Do NOT push to the remote");
     });
 
     test("should format review state correctly", () => {
