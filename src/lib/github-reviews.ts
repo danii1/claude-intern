@@ -304,6 +304,41 @@ export class GitHubReviewsClient {
   }
 
   /**
+   * Add a reaction to a review comment.
+   * Supported reactions: +1, -1, laugh, confused, heart, hooray, rocket, eyes
+   */
+  async addReactionToComment(
+    owner: string,
+    repo: string,
+    commentId: number,
+    reaction: string
+  ): Promise<void> {
+    await this.apiRequest(
+      "POST",
+      `/repos/${owner}/${repo}/pulls/comments/${commentId}/reactions`,
+      owner,
+      repo,
+      { content: reaction }
+    );
+  }
+
+  /**
+   * Get reactions for a review comment.
+   */
+  async getCommentReactions(
+    owner: string,
+    repo: string,
+    commentId: number
+  ): Promise<Array<{ content: string; user: { login: string } }>> {
+    return this.apiRequest<Array<{ content: string; user: { login: string } }>>(
+      "GET",
+      `/repos/${owner}/${repo}/pulls/comments/${commentId}/reactions`,
+      owner,
+      repo
+    );
+  }
+
+  /**
    * Request a re-review from reviewers.
    */
   async requestReReview(

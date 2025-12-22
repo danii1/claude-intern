@@ -161,9 +161,9 @@ async function runClaude(
 }
 
 /**
- * Post replies to review comments with summary of changes.
+ * Mark review comments as addressed and post summary.
  */
-async function postReplyComments(
+async function markCommentsAddressed(
   client: GitHubReviewsClient,
   owner: string,
   repo: string,
@@ -175,31 +175,31 @@ async function postReplyComments(
     return;
   }
 
-  console.log(`   Replying to ${comments.length} review comment(s)...`);
+  console.log(`   Marking ${comments.length} review comment(s) as addressed...`);
 
   let successCount = 0;
 
+  // Add 🎉 (hooray) reaction to each comment
   for (const comment of comments) {
-    // Skip reply comments (only reply to top-level comments)
+    // Skip reply comments (only mark top-level comments)
     if (comment.isReply) {
       continue;
     }
 
     try {
-      const replyBody = `✅ Addressed this feedback in the latest commit.\n\n${changesSummary}`;
-      await client.replyToComment(owner, repo, prNumber, comment.id, replyBody);
+      await client.addReactionToComment(owner, repo, comment.id, "hooray");
       successCount++;
     } catch (error) {
-      console.warn(`   ⚠️  Failed to reply to comment ${comment.id}: ${(error as Error).message}`);
+      console.warn(`   ⚠️  Failed to add reaction to comment ${comment.id}: ${(error as Error).message}`);
     }
   }
 
   if (successCount > 0) {
-    console.log(`✅ Posted ${successCount} review comment replies`);
+    console.log(`✅ Marked ${successCount} comment(s) as addressed with 🎉 reaction`);
   }
 
-  // Also post a general summary comment
-  const summaryBody = formatReviewSummaryReply(successCount, comments.length);
+  // Post a single summary comment
+  const summaryBody = formatReviewSummaryReply(successCount, comments.length, changesSummary);
   try {
     await client.postPullRequestComment(owner, repo, prNumber, summaryBody);
     console.log("✅ Posted review summary comment");
@@ -261,18 +261,27 @@ export async function addressReview(
     review.reviewId
   );
 
-  // Get all PR comments to check for already addressed ones
-  const allPRComments = await githubClient.getPullRequestReviewComments(
-    owner,
-    repo,
-    prNumber
-  );
-
-  // Build set of comment IDs that have been addressed (have a ✅ reply)
+  // Check which comments already have a "hooray" reaction (marked as addressed)
   const addressedCommentIds = new Set<number>();
-  for (const comment of allPRComments) {
-    if (comment.in_reply_to_id && comment.body.startsWith("✅")) {
-      addressedCommentIds.add(comment.in_reply_to_id);
+
+  for (const comment of rawComments) {
+    try {
+      const reactions = await githubClient.getCommentReactions(
+        owner,
+        repo,
+        comment.id
+      );
+
+      // Check if there's a "hooray" (🎉) reaction
+      const hasHoorayReaction = reactions.some((r) => r.content === "hooray");
+      if (hasHoorayReaction) {
+        addressedCommentIds.add(comment.id);
+      }
+    } catch (error) {
+      // Ignore errors fetching reactions, treat as not addressed
+      if (verbose) {
+        console.warn(`   ⚠️  Failed to fetch reactions for comment ${comment.id}`);
+      }
     }
   }
 
@@ -407,14 +416,14 @@ export async function addressReview(
     console.log("\n⏭️  Skipping push (--no-push flag)");
   }
 
-  // Post reply comments if requested (only if push succeeded)
+  // Mark comments as addressed if requested (only if push succeeded)
   if (!noReply && !noPush) {
-    console.log("\n💬 Posting review replies...");
+    console.log("\n💬 Marking comments as addressed...");
 
     // Create a summary of changes
     const changesSummary = `**Changes Summary:**\nAddressed review feedback from @${feedback.reviewer} by implementing the requested changes.`;
 
-    await postReplyComments(
+    await markCommentsAddressed(
       githubClient,
       owner,
       repo,
@@ -423,7 +432,7 @@ export async function addressReview(
       changesSummary
     );
   } else if (noReply) {
-    console.log("\n⏭️  Skipping replies (--no-reply flag)");
+    console.log("\n⏭️  Skipping marking comments (--no-reply flag)");
   }
 
   console.log(`\n✅ Successfully addressed review for PR #${prNumber}`);

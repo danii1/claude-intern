@@ -207,7 +207,8 @@ export function formatReplyMessage(
  */
 export function formatReviewSummaryReply(
   commentsAddressed: number,
-  totalComments: number
+  totalComments: number,
+  changesSummary?: string
 ): string {
   const lines: string[] = [];
 
@@ -222,6 +223,12 @@ export function formatReviewSummaryReply(
       lines.push("");
       lines.push("Some comments may require manual attention or clarification.");
     }
+  }
+
+  // Include changes summary if provided
+  if (changesSummary) {
+    lines.push("");
+    lines.push(changesSummary);
   }
 
   lines.push("");
