@@ -261,18 +261,49 @@ export async function addressReview(
     review.reviewId
   );
 
-  const processedComments: ProcessedReviewComment[] = rawComments.map((c) => ({
-    id: c.id,
-    path: c.path,
-    line: c.line ?? c.original_line,
-    side: c.side,
-    diffHunk: c.diff_hunk,
-    body: c.body,
-    reviewer: c.user.login,
-    isReply: c.in_reply_to_id !== undefined,
-  }));
+  // Get all PR comments to check for already addressed ones
+  const allPRComments = await githubClient.getPullRequestReviewComments(
+    owner,
+    repo,
+    prNumber
+  );
 
-  console.log(`   Found ${processedComments.length} comment(s)`);
+  // Build set of comment IDs that have been addressed (have a ✅ reply)
+  const addressedCommentIds = new Set<number>();
+  for (const comment of allPRComments) {
+    if (comment.in_reply_to_id && comment.body.startsWith("✅")) {
+      addressedCommentIds.add(comment.in_reply_to_id);
+    }
+  }
+
+  const processedComments: ProcessedReviewComment[] = rawComments
+    .filter((c) => !addressedCommentIds.has(c.id)) // Filter out already addressed
+    .map((c) => ({
+      id: c.id,
+      path: c.path,
+      line: c.line ?? c.original_line,
+      side: c.side,
+      diffHunk: c.diff_hunk,
+      body: c.body,
+      reviewer: c.user.login,
+      isReply: c.in_reply_to_id !== undefined,
+    }));
+
+  const totalComments = rawComments.length;
+  const alreadyAddressed = totalComments - processedComments.length;
+
+  console.log(`   Found ${totalComments} comment(s)`);
+  if (alreadyAddressed > 0) {
+    console.log(`   ${alreadyAddressed} already addressed (skipping)`);
+  }
+  console.log(`   ${processedComments.length} remaining to address`);
+
+  // If no comments remaining, we're done
+  if (processedComments.length === 0) {
+    console.log("\n✅ All review comments have been addressed already.");
+    console.log(`   View PR: ${prUrl}`);
+    return;
+  }
 
   // Build feedback object
   const feedback: ProcessedReviewFeedback = {
