@@ -56,6 +56,19 @@ export function formatReviewPrompt(feedback: ProcessedReviewFeedback): string {
     }
   }
 
+  // Conversation comments
+  if (feedback.conversationComments && feedback.conversationComments.length > 0) {
+    lines.push("## General Conversation Feedback");
+    lines.push("");
+    lines.push("The reviewer also provided these general comments in the conversation:");
+    lines.push("");
+
+    for (const comment of feedback.conversationComments) {
+      lines.push(`> ${comment.body.split("\n").join("\n> ")}`);
+      lines.push("");
+    }
+  }
+
   // Instructions
   lines.push("## Instructions");
   lines.push("");

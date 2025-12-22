@@ -154,6 +154,7 @@ export interface ProcessedReviewFeedback {
   reviewState: GitHubReview["state"];
   reviewBody: string | null;
   comments: ProcessedReviewComment[];
+  conversationComments?: ProcessedConversationComment[];
   installationId?: number;
 }
 
@@ -166,6 +167,13 @@ export interface ProcessedReviewComment {
   body: string;
   reviewer: string;
   isReply: boolean;
+}
+
+export interface ProcessedConversationComment {
+  id: number;
+  body: string;
+  author: string;
+  createdAt: string;
 }
 
 /**

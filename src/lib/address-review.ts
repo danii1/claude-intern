@@ -15,6 +15,7 @@ import { Utils } from "./utils";
 import type {
   ProcessedReviewComment,
   ProcessedReviewFeedback,
+  ProcessedConversationComment,
 } from "../types/github-webhooks";
 
 export interface AddressReviewOptions {
@@ -67,6 +68,7 @@ async function getLatestChangesRequestedReview(
   reviewId: number;
   reviewer: string;
   body: string | null;
+  submittedAt: string;
 } | null> {
   // Fetch all reviews for the PR using the client
   const reviews = await client.getReviews(owner, repo, prNumber);
@@ -88,6 +90,7 @@ async function getLatestChangesRequestedReview(
     reviewId: latest.id,
     reviewer: latest.user.login,
     body: latest.body,
+    submittedAt: latest.submitted_at,
   };
 }
 
@@ -200,7 +203,7 @@ function extractClaudeSummary(output: string): string {
 }
 
 /**
- * Mark review comments as addressed and post summary.
+ * Mark review comments and conversation comments as addressed and post summary.
  */
 async function markCommentsAddressed(
   client: GitHubReviewsClient,
@@ -208,28 +211,45 @@ async function markCommentsAddressed(
   repo: string,
   prNumber: number,
   comments: ProcessedReviewComment[],
+  conversationComments: ProcessedConversationComment[],
   changesSummary: string
 ): Promise<void> {
-  if (comments.length === 0) {
+  if (comments.length === 0 && conversationComments.length === 0) {
     return;
   }
 
-  console.log(`   Marking ${comments.length} review comment(s) as addressed...`);
-
   let successCount = 0;
 
-  // Add 🎉 (hooray) reaction to each comment
-  for (const comment of comments) {
-    // Skip reply comments (only mark top-level comments)
-    if (comment.isReply) {
-      continue;
-    }
+  // Add 🎉 (hooray) reaction to each review comment
+  if (comments.length > 0) {
+    console.log(`   Marking ${comments.length} review comment(s) as addressed...`);
 
-    try {
-      await client.addReactionToComment(owner, repo, comment.id, "hooray");
-      successCount++;
-    } catch (error) {
-      console.warn(`   ⚠️  Failed to add reaction to comment ${comment.id}: ${(error as Error).message}`);
+    for (const comment of comments) {
+      // Skip reply comments (only mark top-level comments)
+      if (comment.isReply) {
+        continue;
+      }
+
+      try {
+        await client.addReactionToComment(owner, repo, comment.id, "hooray");
+        successCount++;
+      } catch (error) {
+        console.warn(`   ⚠️  Failed to add reaction to review comment ${comment.id}: ${(error as Error).message}`);
+      }
+    }
+  }
+
+  // Add 🎉 (hooray) reaction to each conversation comment
+  if (conversationComments.length > 0) {
+    console.log(`   Marking ${conversationComments.length} conversation comment(s) as addressed...`);
+
+    for (const comment of conversationComments) {
+      try {
+        await client.addReactionToIssueComment(owner, repo, comment.id, "hooray");
+        successCount++;
+      } catch (error) {
+        console.warn(`   ⚠️  Failed to add reaction to conversation comment ${comment.id}: ${(error as Error).message}`);
+      }
     }
   }
 
@@ -238,7 +258,8 @@ async function markCommentsAddressed(
   }
 
   // Post a single summary comment
-  const summaryBody = formatReviewSummaryReply(successCount, comments.length, changesSummary);
+  const totalComments = comments.length + conversationComments.length;
+  const summaryBody = formatReviewSummaryReply(successCount, totalComments, changesSummary);
   try {
     await client.postPullRequestComment(owner, repo, prNumber, summaryBody);
     console.log("✅ Posted review summary comment");
@@ -365,9 +386,59 @@ export async function addressReview(
   }
   console.log(`   ${processedComments.length} remaining to address`);
 
-  // If no comments remaining, we're done
-  if (processedComments.length === 0) {
-    console.log("\n✅ All review comments have been addressed already.");
+  // Fetch conversation comments (issue comments)
+  console.log("\n💬 Fetching conversation comments...");
+  const rawIssueComments = await githubClient.getIssueComments(owner, repo, prNumber);
+
+  // Filter to only include comments from the reviewer, created after the review
+  const reviewSubmittedAt = new Date(review.submittedAt);
+  const reviewerIssueComments = rawIssueComments.filter(
+    (c) => c.user.login === review.reviewer && new Date(c.created_at) >= reviewSubmittedAt
+  );
+
+  // Check which issue comments already have a "hooray" reaction
+  const addressedIssueCommentIds = new Set<number>();
+
+  for (const comment of reviewerIssueComments) {
+    try {
+      const reactions = await githubClient.getIssueCommentReactions(
+        owner,
+        repo,
+        comment.id
+      );
+
+      const hasHoorayReaction = reactions.some((r) => r.content === "hooray");
+      if (hasHoorayReaction) {
+        addressedIssueCommentIds.add(comment.id);
+      }
+    } catch (error) {
+      if (verbose) {
+        console.warn(`   ⚠️  Failed to fetch reactions for issue comment ${comment.id}`);
+      }
+    }
+  }
+
+  const processedConversationComments: ProcessedConversationComment[] = reviewerIssueComments
+    .filter((c) => !addressedIssueCommentIds.has(c.id))
+    .map((c) => ({
+      id: c.id,
+      body: c.body,
+      author: c.user.login,
+      createdAt: c.created_at,
+    }));
+
+  const totalIssueComments = reviewerIssueComments.length;
+  const alreadyAddressedIssue = totalIssueComments - processedConversationComments.length;
+
+  console.log(`   Found ${totalIssueComments} conversation comment(s) from reviewer`);
+  if (alreadyAddressedIssue > 0) {
+    console.log(`   ${alreadyAddressedIssue} already addressed (skipping)`);
+  }
+  console.log(`   ${processedConversationComments.length} remaining to address`);
+
+  // If no comments remaining (neither review nor conversation), we're done
+  if (processedComments.length === 0 && processedConversationComments.length === 0) {
+    console.log("\n✅ All review and conversation comments have been addressed already.");
     console.log(`   View PR: ${prUrl}`);
     return;
   }
@@ -382,6 +453,7 @@ export async function addressReview(
     reviewState: "changes_requested",
     reviewBody: review.body,
     comments: processedComments,
+    conversationComments: processedConversationComments.length > 0 ? processedConversationComments : undefined,
   };
 
   // Checkout the PR branch
@@ -498,6 +570,7 @@ export async function addressReview(
       repo,
       prNumber,
       processedComments,
+      processedConversationComments,
       changesSummary
     );
   } else if (noReply) {

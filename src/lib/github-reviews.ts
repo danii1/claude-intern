@@ -304,6 +304,34 @@ export class GitHubReviewsClient {
   }
 
   /**
+   * Get issue comments (conversation tab comments) for a pull request.
+   */
+  async getIssueComments(
+    owner: string,
+    repo: string,
+    prNumber: number
+  ): Promise<Array<{
+    id: number;
+    body: string;
+    user: { login: string };
+    created_at: string;
+    updated_at: string;
+  }>> {
+    return this.apiRequest<Array<{
+      id: number;
+      body: string;
+      user: { login: string };
+      created_at: string;
+      updated_at: string;
+    }>>(
+      "GET",
+      `/repos/${owner}/${repo}/issues/${prNumber}/comments`,
+      owner,
+      repo
+    );
+  }
+
+  /**
    * Add a reaction to a review comment.
    * Supported reactions: +1, -1, laugh, confused, heart, hooray, rocket, eyes
    */
@@ -333,6 +361,41 @@ export class GitHubReviewsClient {
     return this.apiRequest<Array<{ content: string; user: { login: string } }>>(
       "GET",
       `/repos/${owner}/${repo}/pulls/comments/${commentId}/reactions`,
+      owner,
+      repo
+    );
+  }
+
+  /**
+   * Add a reaction to an issue comment (conversation tab comment).
+   * Supported reactions: +1, -1, laugh, confused, heart, hooray, rocket, eyes
+   */
+  async addReactionToIssueComment(
+    owner: string,
+    repo: string,
+    commentId: number,
+    reaction: string
+  ): Promise<void> {
+    await this.apiRequest(
+      "POST",
+      `/repos/${owner}/${repo}/issues/comments/${commentId}/reactions`,
+      owner,
+      repo,
+      { content: reaction }
+    );
+  }
+
+  /**
+   * Get reactions for an issue comment (conversation tab comment).
+   */
+  async getIssueCommentReactions(
+    owner: string,
+    repo: string,
+    commentId: number
+  ): Promise<Array<{ content: string; user: { login: string } }>> {
+    return this.apiRequest<Array<{ content: string; user: { login: string } }>>(
+      "GET",
+      `/repos/${owner}/${repo}/issues/comments/${commentId}/reactions`,
       owner,
       repo
     );
