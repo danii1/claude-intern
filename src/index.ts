@@ -192,7 +192,12 @@ CLAUDE_CLI_PATH=claude
 
   // Update .gitignore to exclude .claude-intern/.env, lock file, and review worktree
   const gitignorePath = join(process.cwd(), ".gitignore");
-  const gitignoreEntries = [".claude-intern/.env", ".claude-intern/.env.local", ".claude-intern/.pid.lock", ".claude-intern/review-worktree/"];
+  const gitignoreEntries = [
+    ".claude-intern/.env",
+    ".claude-intern/.env.local",
+    ".claude-intern/.pid.lock",
+    ".claude-intern/review-worktree/"
+  ];
 
   try {
     let gitignoreContent = "";

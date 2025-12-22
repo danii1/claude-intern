@@ -5,8 +5,6 @@
  */
 
 import { spawn, type ChildProcess } from "child_process";
-import { writeFileSync } from "fs";
-import { join } from "path";
 import { GitHubReviewsClient } from "./github-reviews";
 import {
   formatReviewPrompt,
@@ -99,10 +97,11 @@ async function runClaude(
   prompt: string,
   workDir: string,
   verbose: boolean
-): Promise<{ success: boolean; output: string }> {
+): Promise<{ success: boolean; output: string; maxTurnsReached?: boolean }> {
   return new Promise((resolve) => {
     const claudePath = process.env.CLAUDE_CLI_PATH || "claude";
-    const maxTurns = parseInt(process.env.CLAUDE_MAX_TURNS || "25", 10);
+    // Use high default like regular development (500 turns)
+    const maxTurns = parseInt(process.env.CLAUDE_MAX_TURNS || "500", 10);
 
     if (verbose) {
       console.log(`   Command: ${claudePath} -p --dangerously-skip-permissions --max-turns ${maxTurns}`);
@@ -143,9 +142,13 @@ async function runClaude(
     });
 
     claude.on("close", (code: number | null) => {
+      // Check if Claude hit max turns
+      const maxTurnsReached = output.includes("Reached max turns");
+
       resolve({
-        success: code === 0,
+        success: code === 0 && !maxTurnsReached,
         output,
+        maxTurnsReached,
       });
     });
 
@@ -158,23 +161,50 @@ async function runClaude(
 }
 
 /**
- * Post a reply comment on the PR.
+ * Post replies to review comments with summary of changes.
  */
-async function postReplyComment(
+async function postReplyComments(
   client: GitHubReviewsClient,
   owner: string,
   repo: string,
   prNumber: number,
-  commentsAddressed: number,
-  totalComments: number
+  comments: ProcessedReviewComment[],
+  changesSummary: string
 ): Promise<void> {
-  const body = formatReviewSummaryReply(commentsAddressed, totalComments);
+  if (comments.length === 0) {
+    return;
+  }
 
+  console.log(`   Replying to ${comments.length} review comment(s)...`);
+
+  let successCount = 0;
+
+  for (const comment of comments) {
+    // Skip reply comments (only reply to top-level comments)
+    if (comment.isReply) {
+      continue;
+    }
+
+    try {
+      const replyBody = `✅ Addressed this feedback in the latest commit.\n\n${changesSummary}`;
+      await client.replyToComment(owner, repo, prNumber, comment.id, replyBody);
+      successCount++;
+    } catch (error) {
+      console.warn(`   ⚠️  Failed to reply to comment ${comment.id}: ${(error as Error).message}`);
+    }
+  }
+
+  if (successCount > 0) {
+    console.log(`✅ Posted ${successCount} review comment replies`);
+  }
+
+  // Also post a general summary comment
+  const summaryBody = formatReviewSummaryReply(successCount, comments.length);
   try {
-    await client.postPullRequestComment(owner, repo, prNumber, body);
-    console.log("✅ Posted review summary reply");
+    await client.postPullRequestComment(owner, repo, prNumber, summaryBody);
+    console.log("✅ Posted review summary comment");
   } catch (error) {
-    console.warn(`⚠️  Failed to post reply: ${(error as Error).message}`);
+    console.warn(`⚠️  Failed to post summary: ${(error as Error).message}`);
   }
 }
 
@@ -291,22 +321,45 @@ export async function addressReview(
   // Format prompt for Claude
   const prompt = formatReviewPrompt(feedback);
 
-  // Save prompt to file for reference
-  const promptFile = join(process.cwd(), ".claude-intern-review-prompt.md");
-  writeFileSync(promptFile, prompt, "utf8");
-  if (verbose) {
-    console.log(`💾 Saved review prompt to: ${promptFile}`);
-  }
-
-  // Run Claude
+  // Run Claude (prompt is passed via stdin, no file created)
   console.log("\n🤖 Running Claude to address review feedback...");
   const claudeResult = await runClaude(prompt, process.cwd(), verbose);
 
+  if (claudeResult.maxTurnsReached) {
+    console.error("\n❌ Claude reached max turns limit without completing the task");
+    throw new Error("Claude reached max turns limit. Increase CLAUDE_MAX_TURNS environment variable.");
+  }
+
   if (!claudeResult.success) {
+    console.error("\n❌ Claude failed to complete successfully");
     throw new Error("Claude failed to complete successfully");
   }
 
   console.log("\n✅ Claude completed successfully");
+
+  // Check if there are uncommitted changes
+  const hasChanges = await Utils.hasUncommittedChanges();
+
+  if (!hasChanges) {
+    console.log("\n⚠️  No changes were made by Claude");
+    console.log(`   View PR: ${prUrl}`);
+    return;
+  }
+
+  // Commit changes
+  console.log("\n📝 Committing changes...");
+  const commitResult = await Utils.commitChanges(
+    `PR-${prNumber}`,
+    `Address review feedback from ${feedback.reviewer}`,
+    { verbose }
+  );
+
+  if (!commitResult.success) {
+    console.error(`\n❌ Failed to commit changes: ${commitResult.message}`);
+    throw new Error(`Commit failed: ${commitResult.message}`);
+  }
+
+  console.log("✅ Changes committed successfully");
 
   // Push changes if requested
   if (!noPush) {
@@ -314,6 +367,7 @@ export async function addressReview(
     const pushResult = await Utils.pushCurrentBranch({ verbose });
 
     if (!pushResult.success) {
+      console.error(`\n❌ Failed to push changes: ${pushResult.message}`);
       throw new Error(`Push failed: ${pushResult.message}`);
     }
 
@@ -322,19 +376,23 @@ export async function addressReview(
     console.log("\n⏭️  Skipping push (--no-push flag)");
   }
 
-  // Post reply comment if requested
+  // Post reply comments if requested (only if push succeeded)
   if (!noReply && !noPush) {
-    console.log("\n💬 Posting review summary reply...");
-    await postReplyComment(
+    console.log("\n💬 Posting review replies...");
+
+    // Create a summary of changes
+    const changesSummary = `**Changes Summary:**\nAddressed review feedback from @${feedback.reviewer} by implementing the requested changes.`;
+
+    await postReplyComments(
       githubClient,
       owner,
       repo,
       prNumber,
-      processedComments.length,
-      processedComments.length
+      processedComments,
+      changesSummary
     );
   } else if (noReply) {
-    console.log("\n⏭️  Skipping reply (--no-reply flag)");
+    console.log("\n⏭️  Skipping replies (--no-reply flag)");
   }
 
   console.log(`\n✅ Successfully addressed review for PR #${prNumber}`);
