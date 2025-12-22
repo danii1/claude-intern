@@ -68,11 +68,10 @@ export function formatReviewPrompt(feedback: ProcessedReviewFeedback): string {
   lines.push("4. Ensure your changes don't break existing functionality");
   lines.push("5. Run any relevant tests to verify your changes");
   lines.push("");
-  lines.push("**After making changes:**");
-  lines.push("1. Stage all modified files with `git add .`");
-  lines.push('2. Commit with message: `fix: address PR review feedback`');
-  lines.push("");
-  lines.push("Do NOT push the changes - that will be handled automatically.");
+  lines.push("**IMPORTANT:**");
+  lines.push("- Make your code changes but do NOT commit or push anything");
+  lines.push("- Leave all changes uncommitted - they will be committed and pushed automatically");
+  lines.push("- Just make the file modifications and you're done");
 
   return lines.join("\n");
 }

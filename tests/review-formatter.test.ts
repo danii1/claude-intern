@@ -132,8 +132,8 @@ describe("Review Formatter", () => {
       const prompt = formatReviewPrompt(baseFeedback);
 
       expect(prompt).toContain("Instructions");
-      expect(prompt).toContain("git add");
-      expect(prompt).toContain("fix: address PR review feedback");
+      expect(prompt).toContain("do NOT commit or push");
+      expect(prompt).toContain("Leave all changes uncommitted");
     });
 
     test("should format review state correctly", () => {

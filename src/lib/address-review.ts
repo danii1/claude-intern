@@ -378,28 +378,39 @@ export async function addressReview(
   console.log("\n✅ Claude completed successfully");
 
   // Check if there are uncommitted changes
-  const hasChanges = await Utils.hasUncommittedChanges();
+  const hasUncommitted = await Utils.hasUncommittedChanges();
 
-  if (!hasChanges) {
+  // Check if there are unpushed commits (in case Claude committed despite instructions)
+  const unpushedResult = await Utils.executeGitCommand(
+    ["log", `origin/${pr.head.ref}..HEAD`, "--oneline"],
+    { verbose }
+  );
+  const hasUnpushed = unpushedResult.success && unpushedResult.output.trim().length > 0;
+
+  if (!hasUncommitted && !hasUnpushed) {
     console.log("\n⚠️  No changes were made by Claude");
     console.log(`   View PR: ${prUrl}`);
     return;
   }
 
-  // Commit changes
-  console.log("\n📝 Committing changes...");
-  const commitResult = await Utils.commitChanges(
-    `PR-${prNumber}`,
-    `Address review feedback from ${feedback.reviewer}`,
-    { verbose }
-  );
+  // Commit changes if there are uncommitted files
+  if (hasUncommitted) {
+    console.log("\n📝 Committing changes...");
+    const commitResult = await Utils.commitChanges(
+      `PR-${prNumber}`,
+      `Address review feedback from ${feedback.reviewer}`,
+      { verbose }
+    );
 
-  if (!commitResult.success) {
-    console.error(`\n❌ Failed to commit changes: ${commitResult.message}`);
-    throw new Error(`Commit failed: ${commitResult.message}`);
+    if (!commitResult.success) {
+      console.error(`\n❌ Failed to commit changes: ${commitResult.message}`);
+      throw new Error(`Commit failed: ${commitResult.message}`);
+    }
+
+    console.log("✅ Changes committed successfully");
+  } else if (hasUnpushed) {
+    console.log("\n📝 Changes already committed by Claude");
   }
-
-  console.log("✅ Changes committed successfully");
 
   // Push changes if requested
   if (!noPush) {
