@@ -491,92 +491,138 @@ export async function addressReview(
   // Format prompt for Claude
   const prompt = formatReviewPrompt(feedback);
 
-  // Run Claude (prompt is passed via stdin, no file created)
-  console.log("\n🤖 Running Claude to address review feedback...");
-  const claudeResult = await runClaude(prompt, process.cwd(), verbose);
+  // Set git config for bot author if available (so Claude's commits are attributed to bot)
+  let originalGitName: string | null = null;
+  let originalGitEmail: string | null = null;
 
-  if (claudeResult.maxTurnsReached) {
-    console.error("\n❌ Claude reached max turns limit without completing the task");
-    throw new Error("Claude reached max turns limit. Increase CLAUDE_MAX_TURNS environment variable.");
+  if (gitAuthor) {
+    // Save original git config
+    const nameResult = await Utils.executeGitCommand(["config", "user.name"], { verbose: false });
+    if (nameResult.success && nameResult.output.trim()) {
+      originalGitName = nameResult.output.trim();
+    }
+
+    const emailResult = await Utils.executeGitCommand(["config", "user.email"], { verbose: false });
+    if (emailResult.success && emailResult.output.trim()) {
+      originalGitEmail = emailResult.output.trim();
+    }
+
+    // Set bot author in git config
+    await Utils.executeGitCommand(["config", "user.name", gitAuthor.name], { verbose });
+    await Utils.executeGitCommand(["config", "user.email", gitAuthor.email], { verbose });
+
+    if (verbose) {
+      console.log(`   Set git config to bot author: ${gitAuthor.name} <${gitAuthor.email}>`);
+    }
   }
 
-  if (!claudeResult.success) {
-    console.error("\n❌ Claude failed to complete successfully");
-    throw new Error("Claude failed to complete successfully");
-  }
+  try {
+    // Run Claude (prompt is passed via stdin, no file created)
+    console.log("\n🤖 Running Claude to address review feedback...");
+    const claudeResult = await runClaude(prompt, process.cwd(), verbose);
 
-  console.log("\n✅ Claude completed successfully");
+    if (claudeResult.maxTurnsReached) {
+      console.error("\n❌ Claude reached max turns limit without completing the task");
+      throw new Error("Claude reached max turns limit. Increase CLAUDE_MAX_TURNS environment variable.");
+    }
 
-  // Check if there are unpushed commits (Claude should have committed)
-  const unpushedResult = await Utils.executeGitCommand(
-    ["log", `origin/${pr.head.ref}..HEAD`, "--oneline"],
-    { verbose }
-  );
-  const hasUnpushed = unpushedResult.success && unpushedResult.output.trim().length > 0;
+    if (!claudeResult.success) {
+      console.error("\n❌ Claude failed to complete successfully");
+      throw new Error("Claude failed to complete successfully");
+    }
 
-  // Check if there are uncommitted changes (fallback if Claude didn't commit)
-  const hasUncommitted = await Utils.hasUncommittedChanges();
+    console.log("\n✅ Claude completed successfully");
 
-  if (!hasUncommitted && !hasUnpushed) {
-    console.log("\n⚠️  No changes were made by Claude");
+    // Check if there are unpushed commits (Claude should have committed)
+    const unpushedResult = await Utils.executeGitCommand(
+      ["log", `origin/${pr.head.ref}..HEAD`, "--oneline"],
+      { verbose }
+    );
+    const hasUnpushed = unpushedResult.success && unpushedResult.output.trim().length > 0;
+
+    // Check if there are uncommitted changes (fallback if Claude didn't commit)
+    const hasUncommitted = await Utils.hasUncommittedChanges();
+
+    if (!hasUncommitted && !hasUnpushed) {
+      console.log("\n⚠️  No changes were made by Claude");
+      console.log(`   View PR: ${prUrl}`);
+      return;
+    }
+
+    // Prefer Claude's commits, but handle uncommitted changes as fallback
+    if (hasUnpushed) {
+      console.log("\n✅ Changes committed by Claude");
+    } else if (hasUncommitted) {
+      console.log("\n📝 Claude left changes uncommitted, committing now...");
+      const commitResult = await Utils.commitChanges(
+        `PR-${prNumber}`,
+        `Address review feedback from ${feedback.reviewer}`,
+        { verbose, author: gitAuthor }
+      );
+
+      if (!commitResult.success) {
+        console.error(`\n❌ Failed to commit changes: ${commitResult.message}`);
+        throw new Error(`Commit failed: ${commitResult.message}`);
+      }
+
+      console.log("✅ Changes committed successfully");
+    }
+
+    // Push changes if requested
+    if (!noPush) {
+      console.log("\n📤 Pushing changes...");
+      const pushResult = await Utils.pushCurrentBranch({ verbose });
+
+      if (!pushResult.success) {
+        console.error(`\n❌ Failed to push changes: ${pushResult.message}`);
+        throw new Error(`Push failed: ${pushResult.message}`);
+      }
+
+      console.log("✅ Changes pushed successfully");
+    } else {
+      console.log("\n⏭️  Skipping push (--no-push flag)");
+    }
+
+    // Mark comments as addressed if requested (only if push succeeded)
+    if (!noReply && !noPush) {
+      console.log("\n💬 Marking comments as addressed...");
+
+      // Extract summary from Claude's output
+      const changesSummary = extractClaudeSummary(claudeResult.output);
+
+      await markCommentsAddressed(
+        githubClient,
+        owner,
+        repo,
+        prNumber,
+        processedComments,
+        processedConversationComments,
+        changesSummary
+      );
+    } else if (noReply) {
+      console.log("\n⏭️  Skipping marking comments (--no-reply flag)");
+    }
+
+    console.log(`\n✅ Successfully addressed review for PR #${prNumber}`);
     console.log(`   View PR: ${prUrl}`);
-    return;
-  }
+  } finally {
+    // Restore original git config if we changed it
+    if (gitAuthor) {
+      if (originalGitName) {
+        await Utils.executeGitCommand(["config", "user.name", originalGitName], { verbose: false });
+      } else {
+        await Utils.executeGitCommand(["config", "--unset", "user.name"], { verbose: false });
+      }
 
-  // Prefer Claude's commits, but handle uncommitted changes as fallback
-  if (hasUnpushed) {
-    console.log("\n✅ Changes committed by Claude");
-  } else if (hasUncommitted) {
-    console.log("\n📝 Claude left changes uncommitted, committing now...");
-    const commitResult = await Utils.commitChanges(
-      `PR-${prNumber}`,
-      `Address review feedback from ${feedback.reviewer}`,
-      { verbose, author: gitAuthor }
-    );
+      if (originalGitEmail) {
+        await Utils.executeGitCommand(["config", "user.email", originalGitEmail], { verbose: false });
+      } else {
+        await Utils.executeGitCommand(["config", "--unset", "user.email"], { verbose: false });
+      }
 
-    if (!commitResult.success) {
-      console.error(`\n❌ Failed to commit changes: ${commitResult.message}`);
-      throw new Error(`Commit failed: ${commitResult.message}`);
+      if (verbose) {
+        console.log("   Restored original git config");
+      }
     }
-
-    console.log("✅ Changes committed successfully");
   }
-
-  // Push changes if requested
-  if (!noPush) {
-    console.log("\n📤 Pushing changes...");
-    const pushResult = await Utils.pushCurrentBranch({ verbose });
-
-    if (!pushResult.success) {
-      console.error(`\n❌ Failed to push changes: ${pushResult.message}`);
-      throw new Error(`Push failed: ${pushResult.message}`);
-    }
-
-    console.log("✅ Changes pushed successfully");
-  } else {
-    console.log("\n⏭️  Skipping push (--no-push flag)");
-  }
-
-  // Mark comments as addressed if requested (only if push succeeded)
-  if (!noReply && !noPush) {
-    console.log("\n💬 Marking comments as addressed...");
-
-    // Extract summary from Claude's output
-    const changesSummary = extractClaudeSummary(claudeResult.output);
-
-    await markCommentsAddressed(
-      githubClient,
-      owner,
-      repo,
-      prNumber,
-      processedComments,
-      processedConversationComments,
-      changesSummary
-    );
-  } else if (noReply) {
-    console.log("\n⏭️  Skipping marking comments (--no-reply flag)");
-  }
-
-  console.log(`\n✅ Successfully addressed review for PR #${prNumber}`);
-  console.log(`   View PR: ${prUrl}`);
 }
