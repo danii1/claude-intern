@@ -137,6 +137,55 @@ export class Utils {
   }
 
   /**
+   * Extract target branch from JIRA task description
+   * Looks for patterns like "Target branch: <branch-name>"
+   * Handles various markdown formatting (bold, italic, headings, etc.)
+   */
+  static extractTargetBranch(description: string | undefined): string | null {
+    if (!description) {
+      return null;
+    }
+
+    // Support multiple patterns with flexible markdown formatting:
+    // - "Target branch: branch-name"
+    // - "**Target branch**: branch-name"
+    // - "*Target branch*: branch-name"
+    // - "## Target branch: branch-name"
+    // - "_Base branch_: branch-name"
+    // - "***PR target***: branch-name"
+    // The regex handles:
+    // - Optional leading # characters (headings)
+    // - Optional * or _ for bold/italic (0-3 occurrences before and after keyword)
+    // - The keyword (target branch, base branch, pr target)
+    // - REQUIRED colon (with optional table separator |)
+    // - The branch name (capturing group) - allows -, _, /, ., alphanumeric
+    // - Must end at whitespace, newline, or markdown formatting
+    const patterns = [
+      /#{0,6}\s*[*_]{0,3}target\s+branch[*_]{0,3}\s*:\s*\|?\s*[*_]{0,3}([a-zA-Z0-9][a-zA-Z0-9._/-]*)(?=\s|[*_,]|\n|$)/i,
+      /#{0,6}\s*[*_]{0,3}base\s+branch[*_]{0,3}\s*:\s*\|?\s*[*_]{0,3}([a-zA-Z0-9][a-zA-Z0-9._/-]*)(?=\s|[*_,]|\n|$)/i,
+      /#{0,6}\s*[*_]{0,3}pr\s+target[*_]{0,3}\s*:\s*\|?\s*[*_]{0,3}([a-zA-Z0-9][a-zA-Z0-9._/-]*)(?=\s|[*_,]|\n|$)/i,
+    ];
+
+    for (const pattern of patterns) {
+      const match = description.match(pattern);
+      if (match && match[1]) {
+        let branchName = match[1].trim();
+
+        // Clean up any remaining markdown artifacts (but preserve underscores in branch name)
+        // Only remove leading/trailing * and _ that are markdown formatting
+        branchName = branchName.replace(/^[*_]+/, '').replace(/[*_]+$/, '');
+
+        // Validate branch name (basic check)
+        if (branchName && branchName.length > 0 && !branchName.includes(' ')) {
+          return branchName;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
    * Generate a unique filename based on task key and timestamp
    */
   static generateTaskFilename(taskKey: string, extension = "md"): string {

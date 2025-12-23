@@ -240,6 +240,12 @@ claude-intern TASK-123 --create-pr
 # Create pull request targeting specific branch
 claude-intern TASK-123 --create-pr --pr-target-branch develop
 
+# Auto-detect target branch from JIRA task description
+# Simply add "Target branch: <branch-name>" to your task description
+# Patterns supported: "Target branch:", "Base branch:", "PR target:"
+claude-intern TASK-123 --create-pr
+# (will use branch specified in task description, or fall back to --pr-target-branch)
+
 # Testing options - skip ALL JIRA comments (feasibility + implementation)
 claude-intern TASK-123 --skip-jira-comments
 
