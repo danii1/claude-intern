@@ -659,6 +659,19 @@ export class Utils {
         }
       }
 
+      // Ensure target branch is up to date with remote
+      console.log(`📥 Pulling latest changes for target branch '${targetBranch}'...`);
+      const pullResult = await Utils.executeGitCommand([
+        "pull",
+        "origin",
+        targetBranch,
+      ]);
+
+      if (!pullResult.success) {
+        console.log(`⚠️  Failed to pull latest changes for '${targetBranch}': ${pullResult.error}`);
+        console.log("   Continuing with local version of the branch...");
+      }
+
       // Find an available branch name by checking for existing branches
       while (true) {
         const branchExists = await Utils.executeGitCommand([
