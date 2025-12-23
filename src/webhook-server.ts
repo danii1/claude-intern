@@ -13,6 +13,7 @@ import { join } from "path";
 import PQueue from "p-queue";
 import { GitHubReviewsClient } from "./lib/github-reviews";
 import {
+  extractClaudeSummary,
   formatReviewPrompt,
   formatReviewSummaryReply,
 } from "./lib/review-formatter";
@@ -321,7 +322,11 @@ async function processReviewAsync(
     // Post reply if auto-reply is enabled
     if (config.autoReply) {
       console.log("💬 Posting review summary reply...");
-      await postReviewReply(githubClient, owner, repo, prNumber, feedback);
+      // Extract summary from Claude's output
+      const changesSummary = claudeResult.output
+        ? extractClaudeSummary(claudeResult.output)
+        : undefined;
+      await postReviewReply(githubClient, owner, repo, prNumber, feedback, changesSummary);
     }
 
     console.log(`\n✅ Successfully addressed review for PR #${prNumber}`);
@@ -443,12 +448,14 @@ async function postReviewReply(
   owner: string,
   repo: string,
   prNumber: number,
-  feedback: ProcessedReviewFeedback
+  feedback: ProcessedReviewFeedback,
+  changesSummary?: string
 ): Promise<void> {
   try {
     const summary = formatReviewSummaryReply(
       feedback.comments.length,
-      feedback.comments.length
+      feedback.comments.length,
+      changesSummary
     );
 
     // Create a review comment (general comment on the PR)

@@ -8,6 +8,7 @@ import { spawn, type ChildProcess } from "child_process";
 import { GitHubReviewsClient } from "./github-reviews";
 import { GitHubAppAuth } from "./github-app-auth";
 import {
+  extractClaudeSummary,
   formatReviewPrompt,
   formatReviewSummaryReply,
 } from "./review-formatter";
@@ -163,44 +164,6 @@ async function runClaude(
       claude.stdin.end();
     }
   });
-}
-
-/**
- * Extract Claude's summary from its output.
- * Looks for sections like "## Summary" or Claude's final response.
- */
-function extractClaudeSummary(output: string): string {
-  const MAX_LENGTH = 500;
-
-  // Remove ANSI color codes
-  const cleanOutput = output.replace(/\x1b\[[0-9;]*m/g, "");
-
-  // Helper to truncate if needed
-  const truncate = (text: string): string => {
-    return text.length > MAX_LENGTH ? text.substring(0, MAX_LENGTH) + "..." : text;
-  };
-
-  // Try to find a "Summary" section (## Summary or ## summary)
-  const summaryMatch = cleanOutput.match(/##\s*Summary\s*\n+([\s\S]*?)(?=\n##|\n---|\z)/i);
-  if (summaryMatch && summaryMatch[1].trim()) {
-    return truncate(summaryMatch[1].trim());
-  }
-
-  // Try to find "Changes Made" section (### Changes Made:)
-  const changesMatch = cleanOutput.match(/###\s*Changes Made:?\s*\n+([\s\S]*?)(?=\n###|\n##|\n---|\z)/i);
-  if (changesMatch && changesMatch[1].trim()) {
-    const text = `**Changes Made:**\n${changesMatch[1].trim()}`;
-    return truncate(text);
-  }
-
-  // Look for a paragraph after "Perfect!" or "I've successfully"
-  const successMatch = cleanOutput.match(/(?:Perfect!|I've successfully[^\n]*)\s*\n+([\s\S]*?)(?=\n##|\n###|\z)/);
-  if (successMatch && successMatch[1].trim()) {
-    return truncate(successMatch[1].trim());
-  }
-
-  // Fallback: return a generic message
-  return "Addressed review feedback by implementing the requested changes.";
 }
 
 /**
