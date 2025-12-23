@@ -12,6 +12,7 @@ import {
   formatReviewSummaryReply,
 } from "./review-formatter";
 import { Utils } from "./utils";
+import { runClaudeToFixGitHook } from "./git-hook-fixer";
 import type {
   ProcessedReviewComment,
   ProcessedReviewFeedback,
@@ -549,36 +550,110 @@ export async function addressReview(
       return;
     }
 
+    // Get hook retries configuration
+    const hookRetries = parseInt(process.env.HOOK_RETRIES || "10", 10);
+    const claudePath = process.env.CLAUDE_CLI_PATH || "claude";
+    const maxTurns = parseInt(process.env.CLAUDE_MAX_TURNS || "500", 10);
+
     // Prefer Claude's commits, but handle uncommitted changes as fallback
     if (hasUnpushed) {
       console.log("\n✅ Changes committed by Claude");
     } else if (hasUncommitted) {
       console.log("\n📝 Claude left changes uncommitted, committing now...");
-      const commitResult = await Utils.commitChanges(
-        `PR-${prNumber}`,
-        `Address review feedback from ${feedback.reviewer}`,
-        { verbose, author: gitAuthor }
-      );
 
-      if (!commitResult.success) {
-        console.error(`\n❌ Failed to commit changes: ${commitResult.message}`);
-        throw new Error(`Commit failed: ${commitResult.message}`);
+      // Try committing with retry logic for git hook failures
+      let commitAttempt = 0;
+      let commitSuccess = false;
+
+      while (commitAttempt <= hookRetries && !commitSuccess) {
+        commitAttempt++;
+        const commitResult = await Utils.commitChanges(
+          `PR-${prNumber}`,
+          `Address review feedback from ${feedback.reviewer}`,
+          { verbose, author: gitAuthor }
+        );
+
+        if (commitResult.success) {
+          console.log("✅ Changes committed successfully");
+          commitSuccess = true;
+          break;
+        }
+
+        // Check if this is a git hook error that we can try to fix
+        if (commitResult.hookError && commitAttempt <= hookRetries) {
+          console.log(`\n⚠️  Git hook failed (attempt ${commitAttempt}/${hookRetries + 1})`);
+
+          // Try to fix the hook error with Claude
+          const fixed = await runClaudeToFixGitHook("commit", claudePath, maxTurns);
+
+          if (fixed) {
+            console.log("\n🔄 Retrying commit after Claude fixed the issues...");
+            continue;
+          } else {
+            console.log("\n❌ Could not fix git hook errors automatically");
+            break;
+          }
+        } else {
+          // Not a hook error or out of retries
+          if (commitAttempt > hookRetries) {
+            console.log(`\n❌ Max retries (${hookRetries}) exceeded for git hook fixes`);
+          }
+          console.error(`\n❌ Failed to commit changes: ${commitResult.message}`);
+          throw new Error(`Commit failed: ${commitResult.message}`);
+        }
       }
 
-      console.log("✅ Changes committed successfully");
+      if (!commitSuccess) {
+        throw new Error("Failed to commit changes after retries");
+      }
     }
 
     // Push changes if requested
     if (!noPush) {
       console.log("\n📤 Pushing changes...");
-      const pushResult = await Utils.pushCurrentBranch({ verbose });
 
-      if (!pushResult.success) {
-        console.error(`\n❌ Failed to push changes: ${pushResult.message}`);
-        throw new Error(`Push failed: ${pushResult.message}`);
+      // Try pushing with retry logic for git hook failures
+      let pushAttempt = 0;
+      let pushSuccess = false;
+
+      while (pushAttempt <= hookRetries && !pushSuccess) {
+        pushAttempt++;
+        const pushResult = await Utils.pushCurrentBranch({ verbose });
+
+        if (pushResult.success) {
+          console.log("✅ Changes pushed successfully");
+          pushSuccess = true;
+          break;
+        }
+
+        // Check if this is a git hook error that we can try to fix
+        if (pushResult.hookError && pushAttempt <= hookRetries) {
+          console.log(`\n⚠️  Git pre-push hook failed (attempt ${pushAttempt}/${hookRetries + 1})`);
+
+          // Try to fix the hook error with Claude
+          const fixed = await runClaudeToFixGitHook("push", claudePath, maxTurns);
+
+          if (fixed) {
+            console.log("\n🔄 Retrying push after Claude fixed and amended the commit...");
+            // Claude was instructed to amend the commit, so just retry the push
+            continue;
+          } else {
+            console.log("\n❌ Could not fix git pre-push hook errors automatically");
+            break;
+          }
+        } else {
+          // Not a hook error or out of retries
+          if (pushAttempt > hookRetries) {
+            console.log(`\n❌ Max retries (${hookRetries}) exceeded for git hook fixes`);
+          }
+          console.error(`\n❌ Failed to push changes: ${pushResult.message}`);
+          throw new Error(`Push failed: ${pushResult.message}`);
+        }
       }
 
-      console.log("✅ Changes pushed successfully");
+      if (!pushSuccess) {
+        throw new Error("Failed to push changes after retries");
+      }
     } else {
       console.log("\n⏭️  Skipping push (--no-push flag)");
     }
