@@ -413,13 +413,23 @@ export class JiraExtractor {
     }
 
     // Recursively extract text content from ADF nodes
-    const extractText = (nodes: any[]): string => {
+    const extractText = (nodes: any[], isTopLevel = false): string => {
       if (!nodes) return "";
 
       return nodes
-        .map((node) => {
+        .map((node, index) => {
           if (node.type === "text") {
             return node.text || "";
+          }
+          if (node.type === "paragraph") {
+            // Add newline after paragraphs (except the last one at top level)
+            const text = node.content ? extractText(node.content) : "";
+            return isTopLevel && index < nodes.length - 1 ? text + "\n" : text;
+          }
+          if (node.type === "heading") {
+            // Add newline after headings
+            const text = node.content ? extractText(node.content) : "";
+            return isTopLevel ? text + "\n" : text;
           }
           if (node.content) {
             return extractText(node.content);
@@ -429,6 +439,6 @@ export class JiraExtractor {
         .join("");
     };
 
-    return extractText(doc.content || []);
+    return extractText(doc.content || [], true);
   }
 }

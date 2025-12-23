@@ -1,5 +1,15 @@
 # Claude Intern Changelog
 
+## [1.3.1] - 2025-12-23
+
+### Added
+
+- **Automatic Target Branch Detection**: Extract target branch from JIRA task descriptions
+  - Add "Target branch: develop" (or "Base branch:" or "PR target:") to task description
+  - Supports markdown formatting: `**Target branch**: develop`, `## Target branch: develop`, etc.
+  - Falls back to `--pr-target-branch` CLI option when not specified
+  - Perfect for server automation where different tasks target different branches
+
 ## [1.3.0] - 2025-12-18
 
 ### Added

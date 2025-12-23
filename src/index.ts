@@ -642,6 +642,29 @@ async function processSingleTask(
       console.log(`   Comments: ${comments.length} found`);
     }
 
+    // Extract target branch from task description if present
+    // This allows per-task branch targeting via patterns like "Target branch: develop"
+    // Falls back to --pr-target-branch CLI option (default: main)
+    let effectiveTargetBranch = options.prTargetBranch;
+    const { JiraExtractor } = await import("./lib/jira-extractor");
+    const descriptionText = JiraExtractor.extractTextFromADF(issue.fields?.description);
+    const extractedBranch = Utils.extractTargetBranch(descriptionText);
+
+    if (extractedBranch) {
+      console.log(`   🎯 Detected target branch from description: ${extractedBranch}`);
+      if (options.verbose) {
+        // Show context around the match for debugging
+        const lines = descriptionText?.split('\n') || [];
+        const matchingLine = lines.find(line => line.toLowerCase().includes('target branch') || line.toLowerCase().includes('base branch'));
+        if (matchingLine) {
+          console.log(`      Context: "${matchingLine.substring(0, 100)}${matchingLine.length > 100 ? '...' : ''}"`);
+        }
+      }
+      effectiveTargetBranch = extractedBranch;
+    } else {
+      console.log(`   🎯 Using target branch: ${effectiveTargetBranch} (from CLI option)`);
+    }
+
     // Create unified task-specific directory structure
     const baseOutputDir =
       process.env.CLAUDE_INTERN_OUTPUT_DIR || "/tmp/claude-intern-tasks";
@@ -722,7 +745,7 @@ async function processSingleTask(
         console.log("\n🌿 Creating feature branch...");
         const branchResult = await Utils.createFeatureBranch(
           taskKey,
-          options.prTargetBranch
+          effectiveTargetBranch
         );
 
         if (branchResult.success) {
@@ -859,7 +882,7 @@ async function processSingleTask(
         options.git && options.autoCommit,
         issue,
         options.createPr,
-        options.prTargetBranch,
+        effectiveTargetBranch,
         jiraClient,
         options.skipJiraComments,
         Number.parseInt(options.hookRetries),
