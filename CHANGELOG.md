@@ -1,5 +1,91 @@
 # Claude Intern Changelog
 
+## [2.0.0] - 2025-12-24
+
+### Breaking Changes
+
+- **Bun Runtime Required**: The tool now requires [Bun](https://bun.sh) runtime instead of Node.js
+  - Install via `bun install -g claude-intern` (not npm)
+  - Run directly via `bunx claude-intern` or after global install
+
+### Added
+
+- **Webhook Server for Automated PR Reviews**: New webhook server (`serve-webhook`) that automatically addresses PR review feedback
+  - Listens for GitHub PR review events via webhooks
+  - Automatically processes `changes_requested` reviews that mention the bot
+  - Uses dedicated worktree at `/tmp/claude-intern-review-worktree/` for isolation
+  - Supports rate limiting and IP validation for security
+  - Configurable via environment variables (`WEBHOOK_PORT`, `WEBHOOK_SECRET`, etc.)
+
+- **SQLite-Based Persistent Queue**: Crash-resilient webhook processing
+  - Webhook events are persisted to SQLite database using `bun:sqlite`
+  - Automatic recovery of pending events on server restart
+  - Tracks event status (pending/processing/completed/failed)
+  - Configurable retry logic with max retries
+
+- **Address-Review Command**: New `address-review` subcommand for manual PR review handling
+  - Process PR reviews by URL: `claude-intern address-review https://github.com/owner/repo/pull/123`
+  - GitHub App authentication support
+  - Automatic worktree management for isolated processing
+
+- **Bot Attribution for Commits**: Commits made when addressing reviews are attributed to the GitHub App bot
+  - Git author set to `app-name[bot] <id+app-name[bot]@users.noreply.github.com>`
+  - Maintains clear audit trail of automated changes
+
+- **Emoji Reactions for Addressed Comments**: Hooray (🎉) reactions added to review comments after they're addressed
+  - Visual feedback showing which comments have been handled
+  - Tracks addressed comments to avoid duplicate processing
+
+- **Automatic Dependency Installation**: Worktrees automatically install dependencies
+  - Auto-detects package managers: bun, pnpm, npm, yarn, poetry, uv, pip
+  - Runs appropriate install command when preparing worktrees
+
+- **Conversation Comments Support**: PR review feedback now includes conversation/reply comments
+  - Fetches both review comments and general PR comments
+  - Provides Claude with full context of discussions
+
+- **Claude Summary Extraction**: Extracts Claude's implementation summary for PR review replies
+  - Parses Claude's output for summary sections
+  - Includes summary in reply comments for transparency
+
+### Changed
+
+- **Improved Bot Username Detection**: Fixed GitHub App authentication for bot username lookup
+  - Now correctly calls `/app` endpoint with JWT instead of `/user` with installation token
+  - Returns proper `app-name[bot]` format for GitHub Apps
+  - Supports mentions with or without `[bot]` suffix (e.g., `@claude-intern` or `@claude-intern[bot]`)
+
+- **Review Worktree Location**: Moved from `.claude-intern/review-worktree/` to `/tmp/claude-intern-review-worktree/`
+  - Better isolation from main repository
+  - Automatic cleanup of stale worktree registrations from old paths
+
+- **Optimized Worktree Operations**: Improved performance for worktree preparation
+  - Shallow clone with `--depth 1` for faster initial setup
+  - Simplified preparation logic with reduced error noise
+  - Single reusable worktree instead of per-PR worktrees
+
+- **Streamlined CLAUDE.md**: Reduced documentation size to minimize context consumption
+
+### Fixed
+
+- **Fetch All PR Review Comments**: Now fetches all comments from the PR, not just the latest review
+  - Ensures Claude sees complete review context
+  - Handles pagination for PRs with many comments
+
+- **Git Hook Retry Logic**: Added retry mechanism for git operations during PR review addressing
+  - Handles transient failures gracefully
+  - Prevents failed commits due to hook timing issues
+
+- **Stale Worktree Registration Handling**: Gracefully handles orphaned worktree entries
+  - Automatically unregisters worktrees pointing to non-existent directories
+  - Prevents "fatal: is already checked out" errors
+
+### Technical
+
+- **Dependencies**: Added `bun:sqlite` for persistent queue (bundled with Bun runtime)
+- **Build Process**: Updated `build.ts` to target Bun runtime
+- **Documentation**: Updated README.md, USAGE.md, and CLAUDE.md to reflect Bun requirement
+
 ## [1.3.1] - 2025-12-23
 
 ### Added
