@@ -1162,10 +1162,19 @@ export class Utils {
 
         let errorOutput = "";
 
-        if (!verbose && proc.stderr) {
-          proc.stderr.on("data", (data: Buffer) => {
-            errorOutput += data.toString();
-          });
+        if (!verbose) {
+          // Must consume both stdout and stderr to prevent pipe buffer deadlock
+          // When the buffer fills up (typically 64KB), the process blocks
+          if (proc.stdout) {
+            proc.stdout.on("data", () => {
+              // Discard stdout when not verbose, just keep draining the buffer
+            });
+          }
+          if (proc.stderr) {
+            proc.stderr.on("data", (data: Buffer) => {
+              errorOutput += data.toString();
+            });
+          }
         }
 
         proc.on("error", (error: NodeJS.ErrnoException) => {
