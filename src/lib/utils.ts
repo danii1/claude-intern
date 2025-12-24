@@ -793,11 +793,14 @@ export class Utils {
         console.log(`\n📂 Preparing review worktree for branch: ${branch}`);
       }
 
-      // Fetch latest from origin
+      // Fetch latest from origin (shallow fetch to minimize data transfer)
       if (verbose) {
-        console.log(`   Fetching from origin...`);
+        console.log(`   Fetching branch ${branch} from origin (shallow)...`);
       }
-      await Utils.executeGitCommand(["fetch", "origin"], { verbose });
+      await Utils.executeGitCommand(
+        ["fetch", "origin", branch, "--depth=1", "--update-shallow"],
+        { verbose }
+      );
 
       // Check if worktree exists
       const worktreeExists = existsSync(worktreePath);
