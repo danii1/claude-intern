@@ -77,27 +77,33 @@ export class GitHubReviewsClient {
    */
   async getBotUsername(owner: string, repo: string): Promise<string | null> {
     try {
-      const token = await this.getToken(owner, repo);
-
-      // Try to get the authenticated app/user
-      const response = await fetch(`${this.baseUrl}/user`, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: "application/vnd.github.v3+json",
-          "User-Agent": "claude-intern",
-        },
-      });
-
-      if (!response.ok) {
-        return null;
+      // For GitHub App auth, get the app info directly
+      if (this.appAuth) {
+        const appInfo = await this.appAuth.getAppInfo();
+        return `${appInfo.slug}[bot]`;
       }
 
-      const user = (await response.json()) as { login: string; type: string };
+      // For personal access tokens, try /user endpoint
+      if (this.token) {
+        const response = await fetch(`${this.baseUrl}/user`, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${this.token}`,
+            Accept: "application/vnd.github.v3+json",
+            "User-Agent": "claude-intern",
+          },
+        });
 
-      // Only return if it's a Bot type (GitHub Apps show as Bot)
-      if (user.type === "Bot") {
-        return user.login;
+        if (!response.ok) {
+          return null;
+        }
+
+        const user = (await response.json()) as { login: string; type: string };
+
+        // Only return if it's a Bot type
+        if (user.type === "Bot") {
+          return user.login;
+        }
       }
 
       return null;

@@ -91,7 +91,7 @@ export function parseEventType(
 
 /**
  * Check if text contains a mention of the bot.
- * Looks for @bot-name patterns.
+ * Looks for @bot-name patterns. Also matches without [bot] suffix.
  */
 export function containsBotMention(text: string | null, botName?: string): boolean {
   if (!text) {
@@ -106,7 +106,19 @@ export function containsBotMention(text: string | null, botName?: string): boole
   // Escape special regex characters in bot name
   const escapedName = botName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const pattern = new RegExp(`@${escapedName}\\b`, "i");
-  return pattern.test(text);
+  if (pattern.test(text)) {
+    return true;
+  }
+
+  // Also check without [bot] suffix (e.g., @claude-intern instead of @claude-intern[bot])
+  if (botName.endsWith("[bot]")) {
+    const nameWithoutBot = botName.slice(0, -5); // Remove "[bot]"
+    const escapedNameWithoutBot = nameWithoutBot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const patternWithoutBot = new RegExp(`@${escapedNameWithoutBot}\\b`, "i");
+    return patternWithoutBot.test(text);
+  }
+
+  return false;
 }
 
 /**

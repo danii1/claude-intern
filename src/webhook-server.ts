@@ -9,6 +9,7 @@
 
 import { spawn, type ChildProcess } from "child_process";
 import { existsSync, mkdirSync, writeFileSync } from "fs";
+import { createServer, type IncomingMessage, type ServerResponse } from "http";
 import { join } from "path";
 import PQueue from "p-queue";
 import { GitHubReviewsClient } from "./lib/github-reviews";
@@ -301,7 +302,7 @@ async function processReviewAsync(
 
     // Prepare the single reusable worktree for this review
     console.log(`🌿 Preparing worktree for branch: ${branch}`);
-    const worktreePath = await prepareRepository(branch);
+    const worktreePath = await prepareRepository(branch, config.debug);
 
     if (!worktreePath) {
       console.error("❌ Failed to prepare repository");
@@ -366,7 +367,8 @@ async function processReviewAsync(
  * Returns the worktree directory path.
  */
 async function prepareRepository(
-  branch: string
+  branch: string,
+  verbose = false
 ): Promise<string | null> {
   const isGitRepo = await Utils.isGitRepository();
   if (!isGitRepo) {
@@ -377,7 +379,7 @@ async function prepareRepository(
   // Prepare the single reusable worktree
   console.log(`   Preparing worktree for ${branch}...`);
   const worktreeResult = await Utils.prepareReviewWorktree(branch, {
-    verbose: false,
+    verbose,
   });
 
   if (!worktreeResult.success) {
@@ -525,11 +527,34 @@ function handleHealthCheck(): Response {
 }
 
 /**
+ * Read the body from a Node.js IncomingMessage.
+ */
+function readBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    req.on("error", reject);
+  });
+}
+
+/**
+ * Send a Web API Response via Node.js ServerResponse.
+ */
+async function sendResponse(res: ServerResponse, response: Response): Promise<void> {
+  const body = await response.text();
+  res.writeHead(response.status, {
+    "Content-Type": response.headers.get("Content-Type") || "application/json",
+  });
+  res.end(body);
+}
+
+/**
  * Start the webhook server.
  */
-export function startWebhookServer(
+export async function startWebhookServer(
   config: Partial<WebhookServerConfig> = {}
-): void {
+): Promise<void> {
   const finalConfig: WebhookServerConfig = {
     ...DEFAULT_CONFIG,
     ...config,
@@ -548,46 +573,78 @@ export function startWebhookServer(
   console.log(`   Auto-reply: ${finalConfig.autoReply}`);
   console.log(`   IP validation: ${finalConfig.validateIp}`);
   console.log(`   Debug mode: ${finalConfig.debug}`);
+
+  // Log bot username for debugging
+  try {
+    const githubClient = new GitHubReviewsClient();
+    // Use a dummy repo to trigger app info fetch (doesn't need real repo for app auth)
+    const botName = await githubClient.getBotUsername("_", "_");
+    if (botName) {
+      console.log(`   Bot username: @${botName}`);
+    } else {
+      console.log(`   Bot username: (unknown - using GITHUB_TOKEN or no auth)`);
+    }
+  } catch (error) {
+    console.log(`   Bot username: (failed to determine)`);
+  }
+
   console.log("");
 
-  const server = Bun.serve({
-    port: finalConfig.port,
-    hostname: finalConfig.host,
-
-    async fetch(request: Request): Promise<Response> {
-      const url = new URL(request.url);
+  const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+    try {
+      const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
       const path = url.pathname;
+      const method = req.method || "GET";
 
       // Health check endpoint
-      if (path === "/health" && request.method === "GET") {
-        return handleHealthCheck();
+      if (path === "/health" && method === "GET") {
+        const response = handleHealthCheck();
+        sendResponse(res, response);
+        return;
       }
 
       // Webhook endpoint
-      if (path === "/webhooks/github" && request.method === "POST") {
-        return handleWebhook(request, finalConfig);
+      if (path === "/webhooks/github" && method === "POST") {
+        // Convert Node request to Web Request
+        const body = await readBody(req);
+        const headers = new Headers();
+        for (const [key, value] of Object.entries(req.headers)) {
+          if (value) {
+            headers.set(key, Array.isArray(value) ? value[0] : value);
+          }
+        }
+        const request = new Request(url.toString(), {
+          method: "POST",
+          headers,
+          body,
+        });
+        const response = await handleWebhook(request, finalConfig);
+        sendResponse(res, response);
+        return;
       }
 
       // Root endpoint (info)
-      if (path === "/" && request.method === "GET") {
-        return jsonResponse({
+      if (path === "/" && method === "GET") {
+        const response = jsonResponse({
           service: "Claude Intern Webhook Server",
           endpoints: {
             webhook: "POST /webhooks/github",
             health: "GET /health",
           },
         });
+        sendResponse(res, response);
+        return;
       }
 
       // 404 for unknown routes
-      return jsonResponse({ error: "Not found" }, 404);
-    },
-
-    error(error: Error): Response {
+      sendResponse(res, jsonResponse({ error: "Not found" }, 404));
+    } catch (error) {
       console.error("Server error:", error);
-      return jsonResponse({ error: "Internal server error" }, 500);
-    },
+      sendResponse(res, jsonResponse({ error: "Internal server error" }, 500));
+    }
   });
+
+  server.listen(finalConfig.port, finalConfig.host);
 
   console.log(`✅ Server listening on http://${finalConfig.host}:${finalConfig.port}`);
   console.log("");
