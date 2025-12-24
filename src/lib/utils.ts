@@ -815,87 +815,104 @@ export class Utils {
         console.warn(`   Continuing anyway - worktree may have cached version...`);
       }
 
-      // Check if worktree exists
+      // Check if worktree directory exists on filesystem
       const worktreeExists = existsSync(worktreePath);
 
       if (verbose) {
-        console.log(`   Worktree exists: ${worktreeExists}`);
+        console.log(`   Worktree directory exists: ${worktreeExists}`);
       }
 
       if (worktreeExists) {
-        // Worktree exists - switch branch
-        if (verbose) {
-          console.log(`   Switching to branch ${branch}...`);
-        }
+        // Check if it's a valid git worktree by testing if .git exists and is valid
+        const gitFileExists = existsSync(join(worktreePath, ".git"));
 
-        // Try to switch to the branch
-        let switchResult = await Utils.executeGitCommand(
-          ["checkout", branch],
-          { verbose, cwd: worktreePath }
-        );
-
-        if (verbose) {
-          console.log(`   ✓ Checkout completed (success: ${switchResult.success})`);
-        }
-
-        if (!switchResult.success) {
-          // Try with origin/ prefix and force create local branch with tracking
-          if (verbose) {
-            console.log(`   Retrying with -B flag and tracking...`);
-          }
-          switchResult = await Utils.executeGitCommand(
-            ["checkout", "-B", branch, "--track", `origin/${branch}`],
-            { verbose, cwd: worktreePath }
-          );
-          if (verbose) {
-            console.log(`   ✓ Checkout -B completed (success: ${switchResult.success})`);
-          }
-        }
-
-        if (switchResult.success) {
-          // Pull latest changes
-          if (verbose) {
-            console.log(`   Pulling latest changes...`);
-          }
-          const pullResult = await Utils.executeGitCommand(
-            ["pull", "origin", branch, "--ff-only"],
-            { verbose, cwd: worktreePath }
+        if (gitFileExists) {
+          // Try to verify it's a valid worktree
+          const statusCheck = await Utils.executeGitCommand(
+            ["status", "--porcelain"],
+            { verbose: false, cwd: worktreePath }
           );
 
-          if (verbose) {
-            console.log(`   ✓ Pull completed (success: ${pullResult.success})`);
-            console.log(`✅ Switched to branch ${branch}`);
-          }
+          if (statusCheck.success) {
+            // Valid worktree - switch branch
+            if (verbose) {
+              console.log(`   Switching to branch ${branch}...`);
+            }
 
-          // Install dependencies to ensure Claude has everything needed
-          if (verbose) {
-            console.log(`📦 Installing dependencies...`);
-          }
-          const installResult = await Utils.installDependencies(worktreePath, { verbose });
+            // Check if origin remote exists
+            const originCheck = await Utils.executeGitCommand(
+              ["remote", "get-url", "origin"],
+              { verbose: false, cwd: worktreePath }
+            );
+            const hasOrigin = originCheck.success;
 
-          if (!installResult.success) {
-            // Log warning but don't fail - Claude can still work without dependencies in some cases
-            console.warn(`⚠️  Failed to install dependencies: ${installResult.error}`);
-            console.warn(`   Claude may not be able to run tests or build commands`);
-          }
+            let switchResult;
+            if (hasOrigin) {
+              // Try checkout with -B to force create/reset branch tracking origin
+              switchResult = await Utils.executeGitCommand(
+                ["checkout", "-B", branch, "--track", `origin/${branch}`],
+                { verbose, cwd: worktreePath }
+              );
+            } else {
+              // No origin - just checkout the local branch
+              switchResult = await Utils.executeGitCommand(
+                ["checkout", branch],
+                { verbose, cwd: worktreePath }
+              );
+            }
 
-          return { success: true, path: worktreePath };
+            if (switchResult.success) {
+              // Pull latest changes if origin exists
+              if (hasOrigin) {
+                if (verbose) {
+                  console.log(`   Pulling latest changes...`);
+                }
+                await Utils.executeGitCommand(
+                  ["pull", "origin", branch, "--ff-only"],
+                  { verbose, cwd: worktreePath }
+                );
+              }
+
+              if (verbose) {
+                console.log(`✅ Switched to branch ${branch}`);
+              }
+
+              // Install dependencies
+              if (verbose) {
+                console.log(`📦 Installing dependencies...`);
+              }
+              const installResult = await Utils.installDependencies(worktreePath, { verbose });
+
+              if (!installResult.success) {
+                console.warn(`⚠️  Failed to install dependencies: ${installResult.error}`);
+                console.warn(`   Claude may not be able to run tests or build commands`);
+              }
+
+              return { success: true, path: worktreePath };
+            }
+          }
         }
 
-        // Failed to switch - remove and recreate worktree
+        // Worktree is corrupted or invalid - clean it up
         if (verbose) {
-          console.log(`   Failed to switch, removing worktree...`);
+          console.log(`   Worktree is invalid/corrupted, cleaning up...`);
         }
+
+        // Remove from git's worktree registry (ignore errors)
         await Utils.executeGitCommand(
           ["worktree", "remove", worktreePath, "--force"],
-          { verbose }
+          { verbose: false }
         );
-        // Fallback cleanup
+
+        // Remove directory itself (ignore errors)
         try {
           rmSync(worktreePath, { recursive: true, force: true });
         } catch (e) {
           // Ignore
         }
+
+        // Prune any stale worktree registrations
+        await Utils.executeGitCommand(["worktree", "prune"], { verbose: false });
       }
 
       // Create new worktree
@@ -903,64 +920,62 @@ export class Utils {
         console.log(`   Creating worktree at ${worktreePath}...`);
       }
 
-      let createResult = await Utils.executeGitCommand(
-        ["worktree", "add", "--track", "-b", branch, worktreePath, `origin/${branch}`],
-        { verbose }
+      // Check if the branch exists locally
+      const localBranchCheck = await Utils.executeGitCommand(
+        ["show-ref", "--verify", `refs/heads/${branch}`],
+        { verbose: false }
       );
 
-      if (verbose) {
-        console.log(`   ✓ Worktree add completed (success: ${createResult.success})`);
-      }
+      // Check if origin remote exists
+      const originCheck = await Utils.executeGitCommand(
+        ["remote", "get-url", "origin"],
+        { verbose: false }
+      );
+      const hasOrigin = originCheck.success;
 
-      if (!createResult.success) {
-        // Try without creating new branch (branch might already exist locally)
-        if (verbose) {
-          console.log(`   Retrying without -b flag...`);
+      let createResult;
+
+      if (hasOrigin) {
+        // With origin - try to create worktree tracking origin branch
+        if (localBranchCheck.success) {
+          // Local branch exists - delete it first to avoid conflicts
+          await Utils.executeGitCommand(
+            ["branch", "-D", branch],
+            { verbose: false }
+          );
         }
+
+        createResult = await Utils.executeGitCommand(
+          ["worktree", "add", "--track", "-b", branch, worktreePath, `origin/${branch}`],
+          { verbose }
+        );
+      } else {
+        // No origin - use local branch
         createResult = await Utils.executeGitCommand(
           ["worktree", "add", worktreePath, branch],
           { verbose }
         );
-        if (verbose) {
-          console.log(`   ✓ Worktree add without -b completed (success: ${createResult.success})`);
-        }
       }
 
       if (!createResult.success) {
-        // Check if this is a "missing but already registered" error or "already used" error
+        // If creation failed, it might be due to stale registrations - clean up
         const errorMsg = (createResult.error || "") + (createResult.output || "");
-        if (errorMsg.includes("already registered") ||
-            errorMsg.includes("missing but") ||
-            errorMsg.includes("already used by worktree")) {
+
+        if (errorMsg.includes("already registered") || errorMsg.includes("missing but")) {
           if (verbose) {
-            console.log(`   Stale worktree registration detected, cleaning up...`);
+            console.log(`   Cleaning up stale worktree registrations...`);
           }
 
-          // If the error mentions a specific old worktree path, try to remove it
-          const oldWorktreeMatch = errorMsg.match(/worktree at '([^']+)'/);
-          if (oldWorktreeMatch) {
-            const oldWorktreePath = oldWorktreeMatch[1];
-            if (verbose) {
-              console.log(`   Removing old worktree registration at: ${oldWorktreePath}`);
-            }
-            // Remove the old worktree (force remove even if directory doesn't exist)
-            await Utils.executeGitCommand(
-              ["worktree", "remove", oldWorktreePath, "--force"],
+          // Prune stale worktrees silently
+          await Utils.executeGitCommand(["worktree", "prune"], { verbose: false });
+
+          // Try again after pruning
+          if (hasOrigin) {
+            createResult = await Utils.executeGitCommand(
+              ["worktree", "add", "--track", "-b", branch, worktreePath, `origin/${branch}`],
               { verbose }
             );
-          }
-
-          // Prune stale worktrees
-          await Utils.executeGitCommand(["worktree", "prune"], { verbose });
-
-          // Try creating again with tracking
-          createResult = await Utils.executeGitCommand(
-            ["worktree", "add", "--track", "-b", branch, worktreePath, `origin/${branch}`],
-            { verbose }
-          );
-
-          if (!createResult.success) {
-            // Try without -b flag after pruning (branch might exist)
+          } else {
             createResult = await Utils.executeGitCommand(
               ["worktree", "add", worktreePath, branch],
               { verbose }
@@ -971,7 +986,7 @@ export class Utils {
         if (!createResult.success) {
           return {
             success: false,
-            error: `Failed to create worktree: ${createResult.error}`,
+            error: `Failed to create worktree: ${createResult.error || createResult.output}`,
           };
         }
       }
