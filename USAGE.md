@@ -9,15 +9,15 @@ Claude Intern supports both single task processing and batch processing of multi
 ```bash
 git clone <repo-url>
 cd claude-intern
-npm install
-npm run build
+bun install
+bun run build
 ```
 
 ### Option 2: Global Installation (Recommended)
 
 ```bash
-# From the claude-intern directory
-npm run install-global
+# Install globally
+bun install -g claude-intern
 
 # Now you can use it from anywhere
 claude-intern --help

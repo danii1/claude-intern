@@ -6,14 +6,17 @@ Your AI intern for automatically implementing JIRA tasks using Claude. Supports 
 
 ### Global Installation (Recommended)
 
-Install globally via npm to use from any directory:
+Requires [Bun](https://bun.sh) runtime. Install globally:
 
 ```bash
-# Install globally
-npm install -g claude-intern
+# Install Bun if not already installed
+curl -fsSL https://bun.sh/install | bash
+
+# Install claude-intern globally
+bun install -g claude-intern
 
 # Or use directly without installing
-npx claude-intern PROJ-123
+bunx claude-intern PROJ-123
 ```
 
 ### Local Development Setup
@@ -385,7 +388,7 @@ You can set up automated task processing using cron jobs. This is useful for con
 
 ## Quick Start
 
-1. Install globally: `npm install -g claude-intern`
+1. Install globally: `bun install -g claude-intern`
 2. Initialize your project: `claude-intern init`
 3. Configure your JIRA credentials in `.claude-intern/.env`
 4. Run from any directory: `claude-intern PROJ-123`

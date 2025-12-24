@@ -276,7 +276,7 @@ Complete workflow orchestration: fetch → format → git → claude → commit 
 
 ### Installation & Usage
 
-- **Global Installation**: `npm install -g claude-intern` or `npx claude-intern`
+- **Global Installation**: `bun install -g claude-intern` or `bunx claude-intern`
 - **Single Task**: `claude-intern PROJ-123`
 - **Multiple Tasks**: `claude-intern PROJ-123 PROJ-124 PROJ-125`
 - **JQL Queries**: `claude-intern --jql "project = PROJ AND status = 'To Do'"`

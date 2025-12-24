@@ -14,6 +14,7 @@ import { join } from "path";
 import PQueue from "p-queue";
 import { GitHubAppAuth } from "./lib/github-app-auth";
 import { GitHubReviewsClient } from "./lib/github-reviews";
+import { WebhookQueue } from "./lib/webhook-queue";
 import {
   extractClaudeSummary,
   formatReviewPrompt,
@@ -53,6 +54,9 @@ const rateLimiter = new RateLimiter(60000, 30); // 30 requests per minute
 
 // Review processing queue - ensures sequential processing to avoid race conditions
 const reviewQueue = new PQueue({ concurrency: 1 });
+
+// Persistent webhook queue (initialized in startWebhookServer)
+let webhookQueue: WebhookQueue | null = null;
 
 // Cleanup rate limiter periodically
 setInterval(() => rateLimiter.cleanup(), 60000);
@@ -217,8 +221,15 @@ async function handleWebhook(
       console.log(`   Bot mention: @${botName} detected`);
     }
 
+    // Persist event to SQLite before processing (crash resilience)
+    let eventId: string | undefined;
+    if (webhookQueue) {
+      eventId = webhookQueue.enqueue("pull_request_review", event);
+      debugLog(config, `Persisted event ${eventId} to queue`);
+    }
+
     // Add to queue for sequential processing (prevents race conditions)
-    reviewQueue.add(() => processReviewAsync(event, config)).catch((error) => {
+    reviewQueue.add(() => processReviewWithPersistence(eventId, event, config)).catch((error) => {
       console.error("❌ Error processing review:", error);
     });
 
@@ -226,6 +237,7 @@ async function handleWebhook(
     return jsonResponse({
       success: true,
       message: "Review processing started",
+      eventId,
       prNumber: event.pull_request.number,
       repository: event.repository.full_name,
       processingTime: `${duration}ms`,
@@ -243,6 +255,35 @@ async function handleWebhook(
   }
 
   return jsonResponse({ error: "Unhandled event type" }, 400);
+}
+
+/**
+ * Wrapper for processReviewAsync that handles persistence.
+ */
+async function processReviewWithPersistence(
+  eventId: string | undefined,
+  event: PullRequestReviewEvent,
+  config: WebhookServerConfig
+): Promise<void> {
+  // Mark as processing
+  if (eventId && webhookQueue) {
+    webhookQueue.markProcessing(eventId);
+  }
+
+  try {
+    await processReviewAsync(event, config);
+
+    // Mark as completed (removes from queue)
+    if (eventId && webhookQueue) {
+      webhookQueue.markCompleted(eventId);
+    }
+  } catch (error) {
+    // Mark as failed (will retry if under max retries)
+    if (eventId && webhookQueue) {
+      webhookQueue.markFailed(eventId, (error as Error).message);
+    }
+    throw error; // Re-throw so the queue's catch handler logs it
+  }
 }
 
 /**
@@ -583,10 +624,12 @@ async function postReviewReply(
  * Health check handler.
  */
 function handleHealthCheck(): Response {
+  const queueStats = webhookQueue?.getStats() || { pending: 0, processing: 0, failed: 0 };
   return jsonResponse({
     status: "ok",
     timestamp: new Date().toISOString(),
     version: "1.0.0",
+    queue: queueStats,
   });
 }
 
@@ -631,6 +674,14 @@ export async function startWebhookServer(
     process.exit(1);
   }
 
+  // Initialize persistent webhook queue
+  const dbPath = process.env.WEBHOOK_QUEUE_DB || "/tmp/claude-intern-webhooks/queue.db";
+  webhookQueue = new WebhookQueue({
+    dbPath,
+    maxRetries: parseInt(process.env.WEBHOOK_MAX_RETRIES || "3", 10),
+    verbose: finalConfig.debug,
+  });
+
   console.log("🚀 Starting Claude Intern Webhook Server");
   console.log(`   Port: ${finalConfig.port}`);
   console.log(`   Host: ${finalConfig.host}`);
@@ -650,6 +701,33 @@ export async function startWebhookServer(
     }
   } catch (error) {
     console.log(`   Bot username: (failed to determine)`);
+  }
+
+  // Log queue stats and recover pending events
+  const stats = webhookQueue.getStats();
+  console.log(`   Queue DB: ${dbPath}`);
+  if (stats.pending > 0 || stats.processing > 0 || stats.failed > 0) {
+    console.log(`   Queue stats: ${stats.pending} pending, ${stats.processing} processing, ${stats.failed} failed`);
+  }
+
+  // Recover pending/processing events from previous runs
+  const pendingEvents = webhookQueue.getPendingEvents();
+  if (pendingEvents.length > 0) {
+    console.log(`\n🔄 Recovering ${pendingEvents.length} pending event(s) from previous run...`);
+    for (const event of pendingEvents) {
+      try {
+        const payload = JSON.parse(event.payload) as PullRequestReviewEvent;
+        console.log(`   Requeueing: PR #${payload.pull_request.number} (${payload.repository.full_name})`);
+
+        // Add to processing queue
+        reviewQueue.add(() => processReviewWithPersistence(event.id, payload, finalConfig)).catch((error) => {
+          console.error(`❌ Error processing recovered event ${event.id}:`, error);
+        });
+      } catch (error) {
+        console.error(`   ⚠️  Failed to parse event ${event.id}: ${(error as Error).message}`);
+        webhookQueue.markFailed(event.id, `Failed to parse: ${(error as Error).message}`);
+      }
+    }
   }
 
   console.log("");

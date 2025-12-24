@@ -78,7 +78,7 @@ Claude Intern - AI tool for automatically implementing JIRA tasks using Claude C
 
 ## Key Implementation Details
 
-- **Runtime**: Bun for development, Node.js for distribution (via Bun bundler)
+- **Runtime**: Bun (required for bun:sqlite in webhook queue)
 - **Git branches**: `feature/{task-key-lowercase}` naming convention
 - **Claude execution**: Spawns subprocess with `-p --dangerously-skip-permissions`
 - **JIRA integration**: Posts summaries in Atlassian Document Format
