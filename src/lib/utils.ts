@@ -889,10 +889,37 @@ export class Utils {
       }
 
       if (!createResult.success) {
-        return {
-          success: false,
-          error: `Failed to create worktree: ${createResult.error}`,
-        };
+        // Check if this is a "missing but already registered" error
+        const errorMsg = createResult.error || "";
+        if (errorMsg.includes("already registered") || errorMsg.includes("missing but")) {
+          if (verbose) {
+            console.log(`   Stale worktree registration detected, cleaning up...`);
+          }
+
+          // Prune stale worktrees
+          await Utils.executeGitCommand(["worktree", "prune"], { verbose });
+
+          // Try creating again
+          createResult = await Utils.executeGitCommand(
+            ["worktree", "add", worktreePath, branch],
+            { verbose }
+          );
+
+          if (!createResult.success) {
+            // Try with origin/ prefix after pruning
+            createResult = await Utils.executeGitCommand(
+              ["worktree", "add", worktreePath, `origin/${branch}`],
+              { verbose }
+            );
+          }
+        }
+
+        if (!createResult.success) {
+          return {
+            success: false,
+            error: `Failed to create worktree: ${createResult.error}`,
+          };
+        }
       }
 
       if (verbose) {
