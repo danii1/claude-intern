@@ -196,8 +196,7 @@ CLAUDE_CLI_PATH=claude
   const gitignoreEntries = [
     ".claude-intern/.env",
     ".claude-intern/.env.local",
-    ".claude-intern/.pid.lock",
-    ".claude-intern/review-worktree/"
+    ".claude-intern/.pid.lock"
   ];
 
   try {

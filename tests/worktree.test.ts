@@ -127,7 +127,7 @@ describe("Git Worktree Utilities - Single Reusable Worktree", () => {
 
   test("should get worktree path", () => {
     const path = Utils.getReviewWorktreePath();
-    expect(path).toContain(".claude-intern");
+    expect(path).toBe("/tmp/claude-intern-review-worktree");
     expect(path).toContain("review-worktree");
     expect(path).not.toContain("review-worktrees"); // singular, not plural
   });

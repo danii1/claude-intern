@@ -270,8 +270,8 @@ export class Utils {
   /**
    * Get the current git branch name
    */
-  static async getCurrentBranch(): Promise<string | null> {
-    const result = await Utils.executeGitCommand(["branch", "--show-current"]);
+  static async getCurrentBranch(cwd?: string): Promise<string | null> {
+    const result = await Utils.executeGitCommand(["branch", "--show-current"], { cwd });
     return result.success ? result.output : null;
   }
 
@@ -504,8 +504,8 @@ export class Utils {
     const cwd = options?.cwd;
 
     try {
-      // Get current branch name
-      const currentBranch = await Utils.getCurrentBranch();
+      // Get current branch name (from the specified working directory)
+      const currentBranch = await Utils.getCurrentBranch(cwd);
       if (!currentBranch) {
         return {
           success: false,
@@ -776,8 +776,10 @@ export class Utils {
 
   /**
    * Prepare the single review worktree for webhook processing.
-   * Reuses `.claude-intern/review-worktree/` (singular) and switches branches.
+   * Reuses `/tmp/claude-intern-review-worktree/` (singular) and switches branches.
    * Much more efficient than creating/removing worktrees for each review.
+   *
+   * Automatically cleans up stale worktree registrations (e.g., from old paths).
    */
   static async prepareReviewWorktree(
     branch: string,
@@ -791,19 +793,34 @@ export class Utils {
 
       if (verbose) {
         console.log(`\n📂 Preparing review worktree for branch: ${branch}`);
+        console.log(`   Worktree path: ${worktreePath}`);
       }
 
       // Fetch latest from origin (shallow fetch to minimize data transfer)
       if (verbose) {
         console.log(`   Fetching branch ${branch} from origin (shallow)...`);
       }
-      await Utils.executeGitCommand(
-        ["fetch", "origin", branch, "--depth=1", "--update-shallow"],
+
+      const fetchResult = await Utils.executeGitCommand(
+        ["fetch", "origin", branch, "--depth=1"],
         { verbose }
       );
 
+      if (verbose) {
+        console.log(`   ✓ Fetch completed (success: ${fetchResult.success})`);
+      }
+
+      if (!fetchResult.success) {
+        console.warn(`⚠️  Fetch failed: ${fetchResult.error || fetchResult.output}`);
+        console.warn(`   Continuing anyway - worktree may have cached version...`);
+      }
+
       // Check if worktree exists
       const worktreeExists = existsSync(worktreePath);
+
+      if (verbose) {
+        console.log(`   Worktree exists: ${worktreeExists}`);
+      }
 
       if (worktreeExists) {
         // Worktree exists - switch branch
@@ -817,12 +834,22 @@ export class Utils {
           { verbose, cwd: worktreePath }
         );
 
+        if (verbose) {
+          console.log(`   ✓ Checkout completed (success: ${switchResult.success})`);
+        }
+
         if (!switchResult.success) {
-          // Try with origin/ prefix and force create local branch
+          // Try with origin/ prefix and force create local branch with tracking
+          if (verbose) {
+            console.log(`   Retrying with -B flag and tracking...`);
+          }
           switchResult = await Utils.executeGitCommand(
-            ["checkout", "-B", branch, `origin/${branch}`],
+            ["checkout", "-B", branch, "--track", `origin/${branch}`],
             { verbose, cwd: worktreePath }
           );
+          if (verbose) {
+            console.log(`   ✓ Checkout -B completed (success: ${switchResult.success})`);
+          }
         }
 
         if (switchResult.success) {
@@ -830,12 +857,13 @@ export class Utils {
           if (verbose) {
             console.log(`   Pulling latest changes...`);
           }
-          await Utils.executeGitCommand(
+          const pullResult = await Utils.executeGitCommand(
             ["pull", "origin", branch, "--ff-only"],
             { verbose, cwd: worktreePath }
           );
 
           if (verbose) {
+            console.log(`   ✓ Pull completed (success: ${pullResult.success})`);
             console.log(`✅ Switched to branch ${branch}`);
           }
 
@@ -872,43 +900,69 @@ export class Utils {
 
       // Create new worktree
       if (verbose) {
-        console.log(`   Creating worktree...`);
+        console.log(`   Creating worktree at ${worktreePath}...`);
       }
 
       let createResult = await Utils.executeGitCommand(
-        ["worktree", "add", worktreePath, branch],
+        ["worktree", "add", "--track", "-b", branch, worktreePath, `origin/${branch}`],
         { verbose }
       );
 
-      if (!createResult.success) {
-        // Try with origin/ prefix
-        createResult = await Utils.executeGitCommand(
-          ["worktree", "add", worktreePath, `origin/${branch}`],
-          { verbose }
-        );
+      if (verbose) {
+        console.log(`   ✓ Worktree add completed (success: ${createResult.success})`);
       }
 
       if (!createResult.success) {
-        // Check if this is a "missing but already registered" error
-        const errorMsg = createResult.error || "";
-        if (errorMsg.includes("already registered") || errorMsg.includes("missing but")) {
+        // Try without creating new branch (branch might already exist locally)
+        if (verbose) {
+          console.log(`   Retrying without -b flag...`);
+        }
+        createResult = await Utils.executeGitCommand(
+          ["worktree", "add", worktreePath, branch],
+          { verbose }
+        );
+        if (verbose) {
+          console.log(`   ✓ Worktree add without -b completed (success: ${createResult.success})`);
+        }
+      }
+
+      if (!createResult.success) {
+        // Check if this is a "missing but already registered" error or "already used" error
+        const errorMsg = (createResult.error || "") + (createResult.output || "");
+        if (errorMsg.includes("already registered") ||
+            errorMsg.includes("missing but") ||
+            errorMsg.includes("already used by worktree")) {
           if (verbose) {
             console.log(`   Stale worktree registration detected, cleaning up...`);
+          }
+
+          // If the error mentions a specific old worktree path, try to remove it
+          const oldWorktreeMatch = errorMsg.match(/worktree at '([^']+)'/);
+          if (oldWorktreeMatch) {
+            const oldWorktreePath = oldWorktreeMatch[1];
+            if (verbose) {
+              console.log(`   Removing old worktree registration at: ${oldWorktreePath}`);
+            }
+            // Remove the old worktree (force remove even if directory doesn't exist)
+            await Utils.executeGitCommand(
+              ["worktree", "remove", oldWorktreePath, "--force"],
+              { verbose }
+            );
           }
 
           // Prune stale worktrees
           await Utils.executeGitCommand(["worktree", "prune"], { verbose });
 
-          // Try creating again
+          // Try creating again with tracking
           createResult = await Utils.executeGitCommand(
-            ["worktree", "add", worktreePath, branch],
+            ["worktree", "add", "--track", "-b", branch, worktreePath, `origin/${branch}`],
             { verbose }
           );
 
           if (!createResult.success) {
-            // Try with origin/ prefix after pruning
+            // Try without -b flag after pruning (branch might exist)
             createResult = await Utils.executeGitCommand(
-              ["worktree", "add", worktreePath, `origin/${branch}`],
+              ["worktree", "add", worktreePath, branch],
               { verbose }
             );
           }
@@ -932,10 +986,18 @@ export class Utils {
       }
       const installResult = await Utils.installDependencies(worktreePath, { verbose });
 
+      if (verbose) {
+        console.log(`   ✓ Dependency installation completed (success: ${installResult.success})`);
+      }
+
       if (!installResult.success) {
         // Log warning but don't fail - Claude can still work without dependencies in some cases
         console.warn(`⚠️  Failed to install dependencies: ${installResult.error}`);
         console.warn(`   Claude may not be able to run tests or build commands`);
+      }
+
+      if (verbose) {
+        console.log(`✅ Worktree preparation complete!`);
       }
 
       return { success: true, path: worktreePath };
@@ -951,7 +1013,7 @@ export class Utils {
    * Get the path to the single review worktree.
    */
   static getReviewWorktreePath(): string {
-    return join(process.cwd(), ".claude-intern", "review-worktree");
+    return "/tmp/claude-intern-review-worktree";
   }
 
   /**

@@ -207,7 +207,6 @@ describe("CLI Init Command", () => {
       expect(gitignoreContent).toContain(".claude-intern/.env");
       expect(gitignoreContent).toContain(".claude-intern/.env.local");
       expect(gitignoreContent).toContain(".claude-intern/.pid.lock");
-      expect(gitignoreContent).toContain(".claude-intern/review-worktree/");
 
       // Should have the comment header
       expect(gitignoreContent).toContain("Claude Intern - Keep credentials secure");

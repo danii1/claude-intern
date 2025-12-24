@@ -82,5 +82,6 @@ Claude Intern - AI tool for automatically implementing JIRA tasks using Claude C
 - **Git branches**: `feature/{task-key-lowercase}` naming convention
 - **Claude execution**: Spawns subprocess with `-p --dangerously-skip-permissions`
 - **JIRA integration**: Posts summaries in Atlassian Document Format
-- **Webhook isolation**: Sequential queue + single reusable worktree at `.claude-intern/review-worktree/`
+- **Webhook isolation**: Sequential queue + single reusable worktree at `/tmp/claude-intern-review-worktree/`
+  - Automatically cleans up stale worktree registrations from old paths (e.g., `.claude-intern/review-worktree/`)
 - **Dependency installation**: Auto-detects package managers (bun/pnpm/npm/poetry/etc.) when preparing worktrees

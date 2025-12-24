@@ -631,6 +631,36 @@ export async function addressReview(
     console.log(`\n✅ Successfully addressed review for PR #${prNumber}`);
     console.log(`   View PR: ${prUrl}`);
   } finally {
+    // Clean up any untracked files left by linters/tools/Claude
+    const statusResult = await Utils.executeGitCommand(
+      ["status", "--porcelain"],
+      { verbose: false, cwd: workDir }
+    );
+
+    if (statusResult.success && statusResult.output.trim()) {
+      // Check for untracked files (lines starting with "??")
+      const untrackedLines = statusResult.output
+        .split("\n")
+        .filter(line => line.startsWith("??"));
+
+      if (untrackedLines.length > 0) {
+        if (verbose) {
+          console.log("\n🧹 Cleaning up untracked files...");
+          untrackedLines.forEach(line => {
+            const file = line.substring(3).trim();
+            console.log(`   Removing: ${file}`);
+          });
+        }
+
+        // Use git clean to remove all untracked files and directories
+        // -f: force, -d: directories
+        await Utils.executeGitCommand(
+          ["clean", "-fd"],
+          { verbose: false, cwd: workDir }
+        );
+      }
+    }
+
     // Restore original git config if we changed it
     if (gitAuthor) {
       if (originalGitName) {
