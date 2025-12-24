@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, writeFileSync } from "fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "http";
 import { join } from "path";
 import PQueue from "p-queue";
+import { GitHubAppAuth } from "./lib/github-app-auth";
 import { GitHubReviewsClient } from "./lib/github-reviews";
 import {
   extractClaudeSummary,
@@ -31,6 +32,7 @@ import {
 } from "./lib/webhook-handler";
 import type {
   PingEvent,
+  ProcessedReviewComment,
   ProcessedReviewFeedback,
   PullRequestReviewEvent,
   WebhookServerConfig,
@@ -244,6 +246,44 @@ async function handleWebhook(
 }
 
 /**
+ * Mark review comments as addressed by adding a hooray reaction.
+ */
+async function markCommentsAsAddressed(
+  client: GitHubReviewsClient,
+  owner: string,
+  repo: string,
+  comments: ProcessedReviewComment[],
+  verbose = false
+): Promise<void> {
+  if (comments.length === 0) {
+    return;
+  }
+
+  console.log(`🎉 Marking ${comments.length} comment(s) as addressed...`);
+  let successCount = 0;
+
+  for (const comment of comments) {
+    // Skip reply comments (only mark top-level comments)
+    if (comment.isReply) {
+      continue;
+    }
+
+    try {
+      await client.addReactionToComment(owner, repo, comment.id, "hooray");
+      successCount++;
+    } catch (error) {
+      if (verbose) {
+        console.warn(`   ⚠️  Failed to add reaction to comment ${comment.id}: ${(error as Error).message}`);
+      }
+    }
+  }
+
+  if (successCount > 0) {
+    console.log(`✅ Marked ${successCount} comment(s) as addressed with 🎉 reaction`);
+  }
+}
+
+/**
  * Process a review asynchronously.
  */
 async function processReviewAsync(
@@ -259,6 +299,20 @@ async function processReviewAsync(
   try {
     // Initialize GitHub client
     const githubClient = new GitHubReviewsClient();
+
+    // Get GitHub App author info if available (for commit attribution)
+    let gitAuthor: { name: string; email: string } | undefined;
+    if (!process.env.GITHUB_TOKEN) {
+      const githubAppAuth = GitHubAppAuth.fromEnvironment();
+      if (githubAppAuth) {
+        try {
+          gitAuthor = await githubAppAuth.getGitAuthor();
+          debugLog(config, `Commits will be authored by: ${gitAuthor.name}`);
+        } catch (error) {
+          debugLog(config, `Could not get GitHub App author info: ${(error as Error).message}`);
+        }
+      }
+    }
 
     // Fetch ALL review comments for the PR (not just from this review)
     console.log("📥 Fetching review comments...");
@@ -309,6 +363,13 @@ async function processReviewAsync(
       return;
     }
 
+    // Set git config for bot author if available (so Claude's commits are attributed to bot)
+    if (gitAuthor) {
+      await Utils.executeGitCommand(["config", "user.name", gitAuthor.name], { verbose: config.debug, cwd: worktreePath });
+      await Utils.executeGitCommand(["config", "user.email", gitAuthor.email], { verbose: config.debug, cwd: worktreePath });
+      console.log(`🤖 Git author set to: ${gitAuthor.name}`);
+    }
+
     // Format prompt for Claude
     const prompt = formatReviewPrompt(feedback);
 
@@ -341,6 +402,9 @@ async function processReviewAsync(
     }
 
     console.log("✅ Changes pushed successfully");
+
+    // Mark comments as addressed with hooray reaction
+    await markCommentsAsAddressed(githubClient, owner, repo, processedComments, config.debug);
 
     // Post reply if auto-reply is enabled
     if (config.autoReply) {
