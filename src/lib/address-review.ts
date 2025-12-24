@@ -295,13 +295,12 @@ export async function addressReview(
 
   console.log(`   Found review from @${review.reviewer}`);
 
-  // Fetch review comments
+  // Fetch ALL review comments for the PR (not just from this review)
   console.log("\n📥 Fetching review comments...");
-  const rawComments = await githubClient.getReviewComments(
+  const rawComments = await githubClient.getPullRequestReviewComments(
     owner,
     repo,
-    prNumber,
-    review.reviewId
+    prNumber
   );
 
   // Check which comments already have a "hooray" reaction (marked as addressed)

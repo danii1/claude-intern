@@ -174,12 +174,11 @@ async function handleWebhook(
 
     debugLog(config, `Bot username: ${botName || "unknown"}`);
 
-    // Fetch review comments for mention checking
-    const rawComments = await githubClient.getReviewComments(
+    // Fetch ALL review comments for mention checking (not just from this review)
+    const rawComments = await githubClient.getPullRequestReviewComments(
       owner,
       repo,
-      event.pull_request.number,
-      event.review.id
+      event.pull_request.number
     );
     const processedComments = rawComments.map(processReviewComment);
 
@@ -260,16 +259,39 @@ async function processReviewAsync(
     // Initialize GitHub client
     const githubClient = new GitHubReviewsClient();
 
-    // Fetch review comments
+    // Fetch ALL review comments for the PR (not just from this review)
     console.log("📥 Fetching review comments...");
-    const rawComments = await githubClient.getReviewComments(
+    const allRawComments = await githubClient.getPullRequestReviewComments(
       owner,
       repo,
-      prNumber,
-      event.review.id
+      prNumber
     );
 
-    console.log(`   Found ${rawComments.length} comment(s)`);
+    console.log(`   Found ${allRawComments.length} total comment(s)`);
+
+    // Filter out comments that have already been addressed (have a "hooray" reaction)
+    const addressedCommentIds = new Set<number>();
+
+    for (const comment of allRawComments) {
+      try {
+        const reactions = await githubClient.getCommentReactions(owner, repo, comment.id);
+        const hasHoorayReaction = reactions.some((r) => r.content === "hooray");
+        if (hasHoorayReaction) {
+          addressedCommentIds.add(comment.id);
+        }
+      } catch (error) {
+        // Ignore errors, treat as not addressed
+        debugLog(config, `Failed to fetch reactions for comment ${comment.id}`);
+      }
+    }
+
+    const rawComments = allRawComments.filter((c) => !addressedCommentIds.has(c.id));
+    const alreadyAddressed = allRawComments.length - rawComments.length;
+
+    if (alreadyAddressed > 0) {
+      console.log(`   ${alreadyAddressed} already addressed (skipping)`);
+    }
+    console.log(`   ${rawComments.length} remaining to address`);
 
     // Process comments
     const processedComments = rawComments.map(processReviewComment);
