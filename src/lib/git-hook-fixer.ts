@@ -13,12 +13,14 @@ import { Utils } from "./utils";
  * @param hookType - Type of git hook that failed ("commit" or "push")
  * @param claudePath - Path to Claude CLI executable
  * @param maxTurns - Maximum number of turns for Claude conversation
+ * @param cwd - Optional working directory for Claude
  * @returns Promise<boolean> - True if hook errors were fixed successfully
  */
 export async function runClaudeToFixGitHook(
   hookType: "commit" | "push",
   claudePath: string,
-  maxTurns: number
+  maxTurns: number,
+  cwd?: string
 ): Promise<boolean> {
   return new Promise((resolve) => {
     console.log("\n🔧 Attempting to fix git hook errors with Claude...");
@@ -89,6 +91,7 @@ ${hookType === "push" ? "- Make sure to amend the commit (git commit --amend --n
       ],
       {
         stdio: ["pipe", "pipe", "pipe"],
+        cwd: cwd || process.cwd(),
       }
     );
 
@@ -123,7 +126,7 @@ ${hookType === "push" ? "- Make sure to amend the commit (git commit --amend --n
         // For push: Claude should have amended the commit, so we just verify nothing is staged
         // For commit: Claude should have completed the commit, so we verify a clean state
         try {
-          const statusResult = await Utils.executeGitCommand(["status", "--porcelain"]);
+          const statusResult = await Utils.executeGitCommand(["status", "--porcelain"], { cwd });
 
           if (hookType === "commit") {
             // For commit fix: verify nothing is staged/modified (commit succeeded)
@@ -135,7 +138,7 @@ ${hookType === "push" ? "- Make sure to amend the commit (git commit --amend --n
               console.log(`   Changes: ${statusResult.output}`);
 
               // Attempt to stage and commit manually
-              const stageResult = await Utils.executeGitCommand(["add", "."]);
+              const stageResult = await Utils.executeGitCommand(["add", "."], { cwd });
               if (!stageResult.success) {
                 console.log("❌ Failed to stage changes:");
                 console.log(`   ${stageResult.error}`);
@@ -145,7 +148,7 @@ ${hookType === "push" ? "- Make sure to amend the commit (git commit --amend --n
 
               const commitResult = await Utils.executeGitCommand([
                 "commit", "--no-verify"
-              ]);
+              ], { cwd });
               if (commitResult.success) {
                 console.log("✅ Successfully committed changes manually!");
                 resolve(true);
@@ -160,7 +163,7 @@ ${hookType === "push" ? "- Make sure to amend the commit (git commit --amend --n
             // Claude should have amended, so check if we can push
             const pushDryRun = await Utils.executeGitCommand([
               "push", "origin", "HEAD", "--dry-run"
-            ]);
+            ], { cwd });
 
             if (pushDryRun.success) {
               console.log("✅ Verification successful - changes are committed and ready to push!");
@@ -169,10 +172,10 @@ ${hookType === "push" ? "- Make sure to amend the commit (git commit --amend --n
               console.log("⚠️  Claude fixed the code but didn't amend - amending manually...");
 
               // Check if there are uncommitted changes to amend
-              const statusCheck = await Utils.executeGitCommand(["status", "--porcelain"]);
+              const statusCheck = await Utils.executeGitCommand(["status", "--porcelain"], { cwd });
               if (statusCheck.success && statusCheck.output.trim() !== "") {
                 // Stage all changes
-                const stageResult = await Utils.executeGitCommand(["add", "."]);
+                const stageResult = await Utils.executeGitCommand(["add", "."], { cwd });
                 if (!stageResult.success) {
                   console.log("❌ Failed to stage changes:");
                   console.log(`   ${stageResult.error}`);
@@ -183,14 +186,14 @@ ${hookType === "push" ? "- Make sure to amend the commit (git commit --amend --n
                 // Amend the commit
                 const amendResult = await Utils.executeGitCommand([
                   "commit", "--amend", "--no-edit", "--no-verify"
-                ]);
+                ], { cwd });
                 if (amendResult.success) {
                   console.log("✅ Successfully amended commit manually!");
 
                   // Verify push would work now
                   const retryPush = await Utils.executeGitCommand([
                     "push", "origin", "HEAD", "--dry-run"
-                  ]);
+                  ], { cwd });
                   if (retryPush.success) {
                     console.log("✅ Verification successful - ready to push!");
                     resolve(true);

@@ -420,8 +420,8 @@ export async function addressReview(
     conversationComments: processedConversationComments.length > 0 ? processedConversationComments : undefined,
   };
 
-  // Checkout the PR branch
-  console.log(`\n🌿 Checking out branch: ${pr.head.ref}`);
+  // Prepare the review worktree
+  console.log(`\n🌿 Preparing review worktree for branch: ${pr.head.ref}`);
 
   // Check if we're in a git repo
   const isGitRepo = await Utils.isGitRepository();
@@ -429,28 +429,15 @@ export async function addressReview(
     throw new Error("Not in a git repository. Please run this command from within the repository.");
   }
 
-  // Fetch and checkout branch
-  await Utils.executeGitCommand(["fetch", "origin"], { verbose });
+  // Prepare the single reusable worktree for this review
+  const worktreeResult = await Utils.prepareReviewWorktree(pr.head.ref, { verbose });
 
-  const checkoutResult = await Utils.executeGitCommand(
-    ["checkout", pr.head.ref],
-    { verbose }
-  );
-
-  if (!checkoutResult.success) {
-    // Try to checkout tracking branch
-    const trackResult = await Utils.executeGitCommand(
-      ["checkout", "-b", pr.head.ref, `origin/${pr.head.ref}`],
-      { verbose }
-    );
-
-    if (!trackResult.success) {
-      throw new Error(`Failed to checkout branch ${pr.head.ref}: ${trackResult.error}`);
-    }
+  if (!worktreeResult.success) {
+    throw new Error(`Failed to prepare worktree: ${worktreeResult.error}`);
   }
 
-  // Pull latest changes
-  await Utils.executeGitCommand(["pull", "origin", pr.head.ref], { verbose });
+  const workDir = worktreeResult.path!;
+  console.log(`✅ Worktree ready at: ${workDir}`);
 
   // Format prompt for Claude
   const prompt = formatReviewPrompt(feedback);
@@ -461,19 +448,19 @@ export async function addressReview(
 
   if (gitAuthor) {
     // Save original git config
-    const nameResult = await Utils.executeGitCommand(["config", "user.name"], { verbose: false });
+    const nameResult = await Utils.executeGitCommand(["config", "user.name"], { verbose: false, cwd: workDir });
     if (nameResult.success && nameResult.output.trim()) {
       originalGitName = nameResult.output.trim();
     }
 
-    const emailResult = await Utils.executeGitCommand(["config", "user.email"], { verbose: false });
+    const emailResult = await Utils.executeGitCommand(["config", "user.email"], { verbose: false, cwd: workDir });
     if (emailResult.success && emailResult.output.trim()) {
       originalGitEmail = emailResult.output.trim();
     }
 
     // Set bot author in git config
-    await Utils.executeGitCommand(["config", "user.name", gitAuthor.name], { verbose });
-    await Utils.executeGitCommand(["config", "user.email", gitAuthor.email], { verbose });
+    await Utils.executeGitCommand(["config", "user.name", gitAuthor.name], { verbose, cwd: workDir });
+    await Utils.executeGitCommand(["config", "user.email", gitAuthor.email], { verbose, cwd: workDir });
 
     if (verbose) {
       console.log(`   Set git config to bot author: ${gitAuthor.name} <${gitAuthor.email}>`);
@@ -483,7 +470,7 @@ export async function addressReview(
   try {
     // Run Claude (prompt is passed via stdin, no file created)
     console.log("\n🤖 Running Claude to address review feedback...");
-    const claudeResult = await runClaude(prompt, process.cwd(), verbose);
+    const claudeResult = await runClaude(prompt, workDir, verbose);
 
     if (claudeResult.maxTurnsReached) {
       console.error("\n❌ Claude reached max turns limit without completing the task");
@@ -500,12 +487,12 @@ export async function addressReview(
     // Check if there are unpushed commits (Claude should have committed)
     const unpushedResult = await Utils.executeGitCommand(
       ["log", `origin/${pr.head.ref}..HEAD`, "--oneline"],
-      { verbose }
+      { verbose, cwd: workDir }
     );
     const hasUnpushed = unpushedResult.success && unpushedResult.output.trim().length > 0;
 
     // Check if there are uncommitted changes (fallback if Claude didn't commit)
-    const hasUncommitted = await Utils.hasUncommittedChanges();
+    const hasUncommitted = await Utils.hasUncommittedChanges(workDir);
 
     if (!hasUncommitted && !hasUnpushed) {
       console.log("\n⚠️  No changes were made by Claude");
@@ -533,7 +520,7 @@ export async function addressReview(
         const commitResult = await Utils.commitChanges(
           `PR-${prNumber}`,
           `Address review feedback from ${feedback.reviewer}`,
-          { verbose, author: gitAuthor }
+          { verbose, author: gitAuthor, cwd: workDir }
         );
 
         if (commitResult.success) {
@@ -547,7 +534,7 @@ export async function addressReview(
           console.log(`\n⚠️  Git hook failed (attempt ${commitAttempt}/${hookRetries + 1})`);
 
           // Try to fix the hook error with Claude
-          const fixed = await runClaudeToFixGitHook("commit", claudePath, maxTurns);
+          const fixed = await runClaudeToFixGitHook("commit", claudePath, maxTurns, workDir);
 
           if (fixed) {
             console.log("\n🔄 Retrying commit after Claude fixed the issues...");
@@ -581,7 +568,7 @@ export async function addressReview(
 
       while (pushAttempt <= hookRetries && !pushSuccess) {
         pushAttempt++;
-        const pushResult = await Utils.pushCurrentBranch({ verbose });
+        const pushResult = await Utils.pushCurrentBranch({ verbose, cwd: workDir });
 
         if (pushResult.success) {
           console.log("✅ Changes pushed successfully");
@@ -594,7 +581,7 @@ export async function addressReview(
           console.log(`\n⚠️  Git pre-push hook failed (attempt ${pushAttempt}/${hookRetries + 1})`);
 
           // Try to fix the hook error with Claude
-          const fixed = await runClaudeToFixGitHook("push", claudePath, maxTurns);
+          const fixed = await runClaudeToFixGitHook("push", claudePath, maxTurns, workDir);
 
           if (fixed) {
             console.log("\n🔄 Retrying push after Claude fixed and amended the commit...");
@@ -647,15 +634,15 @@ export async function addressReview(
     // Restore original git config if we changed it
     if (gitAuthor) {
       if (originalGitName) {
-        await Utils.executeGitCommand(["config", "user.name", originalGitName], { verbose: false });
+        await Utils.executeGitCommand(["config", "user.name", originalGitName], { verbose: false, cwd: workDir });
       } else {
-        await Utils.executeGitCommand(["config", "--unset", "user.name"], { verbose: false });
+        await Utils.executeGitCommand(["config", "--unset", "user.name"], { verbose: false, cwd: workDir });
       }
 
       if (originalGitEmail) {
-        await Utils.executeGitCommand(["config", "user.email", originalGitEmail], { verbose: false });
+        await Utils.executeGitCommand(["config", "user.email", originalGitEmail], { verbose: false, cwd: workDir });
       } else {
-        await Utils.executeGitCommand(["config", "--unset", "user.email"], { verbose: false });
+        await Utils.executeGitCommand(["config", "--unset", "user.email"], { verbose: false, cwd: workDir });
       }
 
       if (verbose) {

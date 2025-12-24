@@ -278,8 +278,8 @@ export class Utils {
   /**
    * Check if there are uncommitted changes
    */
-  static async hasUncommittedChanges(): Promise<boolean> {
-    const result = await Utils.executeGitCommand(["status", "--porcelain"]);
+  static async hasUncommittedChanges(cwd?: string): Promise<boolean> {
+    const result = await Utils.executeGitCommand(["status", "--porcelain"], { cwd });
     return result.success && result.output.length > 0;
   }
 
@@ -292,10 +292,12 @@ export class Utils {
     options?: {
       verbose?: boolean;
       author?: { name: string; email: string };
+      cwd?: string;
     }
   ): Promise<{ success: boolean; message: string; hookError?: string }> {
     const verbose = options?.verbose ?? false;
     const author = options?.author;
+    const cwd = options?.cwd;
 
     try {
       // Check if we're in a git repository
@@ -307,7 +309,7 @@ export class Utils {
       }
 
       // Check if there are any changes to commit
-      if (!(await Utils.hasUncommittedChanges())) {
+      if (!(await Utils.hasUncommittedChanges(cwd))) {
         return {
           success: false,
           message: "No changes to commit",
@@ -315,7 +317,7 @@ export class Utils {
       }
 
       // Add all changes
-      const addResult = await Utils.executeGitCommand(["add", "."], { verbose });
+      const addResult = await Utils.executeGitCommand(["add", "."], { verbose, cwd });
       if (!addResult.success) {
         return {
           success: false,
@@ -338,7 +340,7 @@ export class Utils {
       commitArgs.push("commit", "-m", commitMessage);
 
       // Commit changes
-      const commitResult = await Utils.executeGitCommand(commitArgs, { verbose });
+      const commitResult = await Utils.executeGitCommand(commitArgs, { verbose, cwd });
       if (commitResult.success) {
         return {
           success: true,
@@ -493,12 +495,13 @@ export class Utils {
   /**
    * Push current branch to remote repository
    */
-  static async pushCurrentBranch(options?: { verbose?: boolean }): Promise<{
+  static async pushCurrentBranch(options?: { verbose?: boolean; cwd?: string }): Promise<{
     success: boolean;
     message: string;
     hookError?: string;
   }> {
     const verbose = options?.verbose ?? false;
+    const cwd = options?.cwd;
 
     try {
       // Get current branch name
@@ -520,7 +523,7 @@ export class Utils {
         "--heads",
         "origin",
         currentBranch,
-      ], { verbose });
+      ], { verbose, cwd });
 
       let pushResult;
       if (remoteBranchExists.success && remoteBranchExists.output.trim()) {
@@ -529,7 +532,7 @@ export class Utils {
           "push",
           "origin",
           currentBranch,
-        ], { verbose });
+        ], { verbose, cwd });
         if (pushResult.success) {
           return {
             success: true,
@@ -543,7 +546,7 @@ export class Utils {
           "-u",
           "origin",
           currentBranch,
-        ], { verbose });
+        ], { verbose, cwd });
         if (pushResult.success) {
           return {
             success: true,

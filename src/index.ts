@@ -549,10 +549,14 @@ program
     "10"
   );
 
-program.parse();
+// Only parse with Commander if we're not running a subcommand
+const isSubcommand = ['init', 'serve', 'address-review'].includes(process.argv[2]);
+if (!isSubcommand) {
+  program.parse();
+}
 
-const options = program.opts<ProgramOptions>();
-const taskKeys = program.args;
+const options = isSubcommand ? {} as ProgramOptions : program.opts<ProgramOptions>();
+const taskKeys = isSubcommand ? [] : program.args;
 
 // Reload environment variables if custom env file was specified
 if (options.envFile) {
