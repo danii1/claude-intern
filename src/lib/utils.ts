@@ -308,6 +308,15 @@ export class Utils {
         };
       }
 
+      // Safety check: prevent commits directly to protected branches
+      const currentBranch = await Utils.getCurrentBranch();
+      if (currentBranch && await Utils.isProtectedBranch(currentBranch)) {
+        return {
+          success: false,
+          message: `Cannot commit directly to protected branch '${currentBranch}'. Please create a feature branch first.`,
+        };
+      }
+
       // Check if there are any changes to commit
       if (!(await Utils.hasUncommittedChanges(cwd))) {
         return {
@@ -513,6 +522,14 @@ export class Utils {
         };
       }
 
+      // Safety check: prevent pushing protected branches (this is unusual but could happen)
+      if (await Utils.isProtectedBranch(currentBranch)) {
+        return {
+          success: false,
+          message: `Cannot push protected branch '${currentBranch}'. This should not happen - please create a feature branch.`,
+        };
+      }
+
       if (verbose) {
         console.log(`📤 Pushing branch '${currentBranch}' to remote...`);
       }
@@ -588,6 +605,23 @@ export class Utils {
         success: false,
         message: `Git push failed: ${(error as Error).message}`,
       };
+    }
+  }
+
+  /**
+   * Check if the current branch is a protected branch (main/master/develop)
+   */
+  static async isProtectedBranch(branch?: string): Promise<boolean> {
+    try {
+      const currentBranch = branch || (await Utils.getCurrentBranch());
+      if (!currentBranch) {
+        return false;
+      }
+
+      const protectedBranches = ["main", "master", "develop", "development", "staging", "production"];
+      return protectedBranches.includes(currentBranch.toLowerCase());
+    } catch (error) {
+      return false;
     }
   }
 

@@ -865,24 +865,25 @@ async function processSingleTask(
         if (branchResult.success) {
           console.log(`✅ ${branchResult.message}`);
         } else {
-          // Check if the failure is due to uncommitted changes
+          // Branch creation failed - this is critical for safety
+          console.error(`\n❌ Failed to create feature branch: ${branchResult.message}`);
+
           if (branchResult.message.includes("uncommitted changes")) {
-            console.error(`❌ ${branchResult.message}`);
-            console.error(
-              "Please commit or stash your changes before running claude-intern."
-            );
-            console.error(
-              'You can use: git add . && git commit -m "your commit message"'
-            );
-            // Release lock before exiting
-            if (lockManager) {
-              lockManager.release();
-            }
-            process.exit(1);
+            console.error("Please commit or stash your changes before running claude-intern.");
+            console.error('You can use: git add . && git commit -m "your commit message"');
           } else {
-            console.log(`⚠️  ${branchResult.message}`);
-            console.log("Continuing without creating a feature branch...");
+            console.error("Cannot proceed without a feature branch to prevent accidental commits to main/master.");
+            console.error(`\nPlease create a feature branch manually:`);
+            console.error(`   git checkout -b feature/${taskKey.toLowerCase()}`);
+            console.error(`\nThen run claude-intern again with --no-git flag:`);
+            console.error(`   claude-intern ${taskKey} --no-git`);
           }
+
+          // Release lock before exiting
+          if (lockManager) {
+            lockManager.release();
+          }
+          process.exit(1);
         }
       }
 
@@ -2262,6 +2263,21 @@ async function runClaude(
                     const currentBranch = await Utils.getCurrentBranch();
 
                     if (currentBranch) {
+                      // Safety check: prevent creating PRs from protected branches
+                      if (await Utils.isProtectedBranch(currentBranch)) {
+                        console.error(
+                          `\n❌ Cannot create PR from protected branch '${currentBranch}'`
+                        );
+                        console.error(
+                          "   This indicates a bug - feature branch was not created properly."
+                        );
+                        console.error(
+                          "   Please create a feature branch manually and try again."
+                        );
+                        resolve();
+                        return;
+                      }
+
                       const prResult = await prManager.createPullRequest(
                         issue,
                         currentBranch,
