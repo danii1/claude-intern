@@ -646,15 +646,23 @@ export class Utils {
         };
       }
 
-      // Check for uncommitted changes
-      if (await Utils.hasUncommittedChanges()) {
-        return {
-          success: false,
-          branchName,
-          message:
-            "There are uncommitted changes. Please commit or stash them before creating a feature branch.",
-        };
+      // Clean up any uncommitted changes and untracked files before creating branch
+      // This ensures a clean state for the new feature branch
+      console.log("🧹 Cleaning up working directory before creating feature branch...");
+
+      // Reset any staged or modified files
+      const resetResult = await Utils.executeGitCommand(["reset", "--hard", "HEAD"]);
+      if (!resetResult.success) {
+        console.warn(`⚠️  Failed to reset changes: ${resetResult.error}`);
       }
+
+      // Remove untracked files and directories
+      const cleanResult = await Utils.executeGitCommand(["clean", "-fd"]);
+      if (!cleanResult.success) {
+        console.warn(`⚠️  Failed to clean untracked files: ${cleanResult.error}`);
+      }
+
+      console.log("✅ Working directory cleaned");
 
       // Switch to target branch first (or main/master if not specified)
       let targetBranch = baseBranch || (await Utils.getMainBranchName());
