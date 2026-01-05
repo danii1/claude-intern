@@ -1011,6 +1011,9 @@ export class Utils {
           // Prune stale worktrees silently
           await Utils.executeGitCommand(["worktree", "prune"], { verbose: false });
 
+          // Delete the local branch if it exists (may have been created by the failed first attempt)
+          await Utils.executeGitCommand(["branch", "-D", branch], { verbose: false });
+
           // Try again after pruning
           if (hasOrigin) {
             createResult = await Utils.executeGitCommand(
