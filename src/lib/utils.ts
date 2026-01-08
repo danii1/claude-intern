@@ -736,12 +736,101 @@ export class Utils {
         branchName = `${baseBranchName}-attempt-${attemptCounter}`;
       }
 
+      // Check if the branch is being used by a worktree and clean it up if needed
+      const worktreeListResult = await Utils.executeGitCommand([
+        "worktree",
+        "list",
+        "--porcelain",
+      ]);
+
+      if (worktreeListResult.success && worktreeListResult.output.includes(`branch refs/heads/${branchName}`)) {
+        console.log(`⚠️  Branch '${branchName}' is checked out in a worktree, cleaning up...`);
+
+        // Find the worktree path for this branch
+        const lines = worktreeListResult.output.split("\n");
+        let worktreeToRemove: string | null = null;
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i].startsWith("worktree ")) {
+            const path = lines[i].substring("worktree ".length);
+            // Check if this worktree has our branch
+            for (let j = i + 1; j < lines.length && !lines[j].startsWith("worktree "); j++) {
+              if (lines[j] === `branch refs/heads/${branchName}`) {
+                worktreeToRemove = path;
+                break;
+              }
+            }
+            if (worktreeToRemove) break;
+          }
+        }
+
+        if (worktreeToRemove) {
+          // Remove the worktree
+          const removeResult = await Utils.executeGitCommand([
+            "worktree",
+            "remove",
+            worktreeToRemove,
+            "--force",
+          ]);
+
+          if (!removeResult.success) {
+            // Try to forcibly delete the worktree directory and prune
+            try {
+              rmSync(worktreeToRemove, { recursive: true, force: true });
+            } catch (e) {
+              // Ignore deletion errors
+            }
+            await Utils.executeGitCommand(["worktree", "prune"]);
+          }
+          console.log(`✅ Cleaned up worktree at ${worktreeToRemove}`);
+        }
+
+        // Delete the branch if it still exists (it might after worktree removal)
+        await Utils.executeGitCommand(["branch", "-D", branchName]);
+      }
+
       // Create and checkout new branch from target branch
-      const createResult = await Utils.executeGitCommand([
+      let createResult = await Utils.executeGitCommand([
         "checkout",
         "-b",
         branchName,
       ]);
+
+      // Handle worktree conflict that wasn't caught by the proactive check
+      if (!createResult.success && createResult.error?.includes("already used by worktree")) {
+        console.log(`⚠️  Branch '${branchName}' is still locked by a worktree, forcing cleanup...`);
+
+        // Extract worktree path from error message
+        const match = createResult.error.match(/already used by worktree at '([^']+)'/);
+        if (match) {
+          const worktreePath = match[1];
+
+          // Force remove the worktree
+          await Utils.executeGitCommand(["worktree", "remove", worktreePath, "--force"]);
+
+          // Also try to delete directory if still exists
+          try {
+            rmSync(worktreePath, { recursive: true, force: true });
+          } catch (e) {
+            // Ignore
+          }
+
+          // Prune worktree registry
+          await Utils.executeGitCommand(["worktree", "prune"]);
+
+          // Delete the branch
+          await Utils.executeGitCommand(["branch", "-D", branchName]);
+
+          console.log(`✅ Force cleaned up worktree at ${worktreePath}`);
+
+          // Retry branch creation
+          createResult = await Utils.executeGitCommand([
+            "checkout",
+            "-b",
+            branchName,
+          ]);
+        }
+      }
+
       if (createResult.success) {
         const message =
           attemptCounter === 1
