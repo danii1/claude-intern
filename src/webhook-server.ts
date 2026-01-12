@@ -8,7 +8,7 @@
  */
 
 import { spawn, type ChildProcess } from "child_process";
-import { existsSync, mkdirSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "http";
 import { join } from "path";
 import PQueue from "p-queue";
@@ -414,14 +414,21 @@ async function processReviewAsync(
     // Format prompt for Claude
     const prompt = formatReviewPrompt(feedback);
 
-    // Save prompt to file
-    const promptFile = join(worktreePath, ".claude-intern-review-prompt.md");
+    // Save prompt to file (outside worktree to avoid git issues)
+    const promptFile = `/tmp/claude-intern-review-prompt-${prNumber}.md`;
     writeFileSync(promptFile, prompt, "utf8");
     console.log(`💾 Saved review prompt to: ${promptFile}`);
 
     // Run Claude to address the feedback
     console.log("🤖 Running Claude to address review feedback...");
     const claudeResult = await runClaudeForReview(promptFile, worktreePath);
+
+    // Clean up prompt file
+    try {
+      unlinkSync(promptFile);
+    } catch {
+      // Ignore cleanup errors
+    }
 
     if (!claudeResult.success) {
       console.error(`❌ Claude failed: ${claudeResult.message}`);
