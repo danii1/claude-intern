@@ -300,27 +300,38 @@ async function markCommentsAsAddressed(
     return;
   }
 
-  console.log(`🎉 Marking ${comments.length} comment(s) as addressed...`);
+  const topLevelComments = comments.filter(c => !c.isReply);
+  const replyCount = comments.length - topLevelComments.length;
+
+  if (replyCount > 0) {
+    console.log(`   Skipping ${replyCount} reply comment(s) (only marking top-level)`);
+  }
+
+  if (topLevelComments.length === 0) {
+    console.log(`   No top-level comments to mark`);
+    return;
+  }
+
+  console.log(`🎉 Marking ${topLevelComments.length} comment(s) as addressed...`);
   let successCount = 0;
+  let failCount = 0;
 
-  for (const comment of comments) {
-    // Skip reply comments (only mark top-level comments)
-    if (comment.isReply) {
-      continue;
-    }
-
+  for (const comment of topLevelComments) {
     try {
       await client.addReactionToComment(owner, repo, comment.id, "hooray");
       successCount++;
     } catch (error) {
-      if (verbose) {
-        console.warn(`   ⚠️  Failed to add reaction to comment ${comment.id}: ${(error as Error).message}`);
-      }
+      failCount++;
+      // Always log failures - they indicate a real problem
+      console.warn(`   ⚠️  Failed to add reaction to comment ${comment.id}: ${(error as Error).message}`);
     }
   }
 
   if (successCount > 0) {
     console.log(`✅ Marked ${successCount} comment(s) as addressed with 🎉 reaction`);
+  }
+  if (failCount > 0) {
+    console.warn(`⚠️  Failed to mark ${failCount} comment(s)`);
   }
 }
 
