@@ -668,6 +668,9 @@ export class Utils {
       let targetBranch = baseBranch || (await Utils.getMainBranchName());
       const currentBranch = await Utils.getCurrentBranch();
 
+      // Track whether we should create branch from remote ref instead of local checkout
+      let createFromRemote = false;
+
       if (currentBranch !== targetBranch) {
         let switchResult = await Utils.executeGitCommand([
           "checkout",
@@ -695,7 +698,11 @@ export class Utils {
           }
         }
 
-        if (!switchResult.success) {
+        // Handle worktree conflict - target branch is locked by another worktree
+        if (!switchResult.success && switchResult.error?.includes("already used by worktree")) {
+          console.log(`⚠️  Target branch '${targetBranch}' is locked by a worktree, will create branch from remote...`);
+          createFromRemote = true;
+        } else if (!switchResult.success) {
           return {
             success: false,
             branchName,
@@ -704,17 +711,32 @@ export class Utils {
         }
       }
 
-      // Ensure target branch is up to date with remote
-      console.log(`📥 Pulling latest changes for target branch '${targetBranch}'...`);
-      const pullResult = await Utils.executeGitCommand([
-        "pull",
-        "origin",
-        targetBranch,
-      ]);
+      // Fetch and update target branch
+      if (createFromRemote) {
+        // Fetch the target branch from remote without checking it out
+        console.log(`📥 Fetching latest '${targetBranch}' from remote...`);
+        const fetchResult = await Utils.executeGitCommand([
+          "fetch",
+          "origin",
+          `${targetBranch}:refs/remotes/origin/${targetBranch}`,
+        ]);
+        if (!fetchResult.success) {
+          console.log(`⚠️  Failed to fetch '${targetBranch}': ${fetchResult.error}`);
+          console.log("   Will try to create branch from local reference...");
+        }
+      } else {
+        // Ensure target branch is up to date with remote
+        console.log(`📥 Pulling latest changes for target branch '${targetBranch}'...`);
+        const pullResult = await Utils.executeGitCommand([
+          "pull",
+          "origin",
+          targetBranch,
+        ]);
 
-      if (!pullResult.success) {
-        console.log(`⚠️  Failed to pull latest changes for '${targetBranch}': ${pullResult.error}`);
-        console.log("   Continuing with local version of the branch...");
+        if (!pullResult.success) {
+          console.log(`⚠️  Failed to pull latest changes for '${targetBranch}': ${pullResult.error}`);
+          console.log("   Continuing with local version of the branch...");
+        }
       }
 
       // Find an available branch name by checking for existing branches
@@ -789,11 +811,28 @@ export class Utils {
       }
 
       // Create and checkout new branch from target branch
-      let createResult = await Utils.executeGitCommand([
-        "checkout",
-        "-b",
-        branchName,
-      ]);
+      // When createFromRemote is true, we couldn't checkout targetBranch (worktree conflict),
+      // so create from the remote or local reference instead
+      const createFromRef = createFromRemote
+        ? `origin/${targetBranch}`
+        : undefined; // undefined means create from HEAD (current branch)
+
+      let createResult = await Utils.executeGitCommand(
+        createFromRef
+          ? ["checkout", "-b", branchName, createFromRef]
+          : ["checkout", "-b", branchName]
+      );
+
+      // If creating from remote ref failed, try the local branch ref
+      if (!createResult.success && createFromRemote) {
+        console.log(`⚠️  Failed to create from origin/${targetBranch}, trying local ref...`);
+        createResult = await Utils.executeGitCommand([
+          "checkout",
+          "-b",
+          branchName,
+          targetBranch,
+        ]);
+      }
 
       // Handle worktree conflict that wasn't caught by the proactive check
       if (!createResult.success && createResult.error?.includes("already used by worktree")) {
@@ -822,12 +861,12 @@ export class Utils {
 
           console.log(`✅ Force cleaned up worktree at ${worktreePath}`);
 
-          // Retry branch creation
-          createResult = await Utils.executeGitCommand([
-            "checkout",
-            "-b",
-            branchName,
-          ]);
+          // Retry branch creation with same ref strategy
+          createResult = await Utils.executeGitCommand(
+            createFromRef
+              ? ["checkout", "-b", branchName, createFromRef]
+              : ["checkout", "-b", branchName]
+          );
         }
       }
 
