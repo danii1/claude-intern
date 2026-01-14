@@ -441,15 +441,48 @@ async function processReviewAsync(
       // Ignore cleanup errors
     }
 
+    // Check for max turns error in output (Claude exits 0 but didn't complete)
+    const hitMaxTurns = claudeResult.output?.includes("Reached max turns");
+
     if (!claudeResult.success) {
       console.error(`❌ Claude failed: ${claudeResult.message}`);
       return;
     }
 
-    console.log("✅ Claude completed successfully");
+    if (hitMaxTurns) {
+      console.warn("⚠️  Claude hit max turns limit");
+    }
 
-    // Push changes from worktree
-    console.log("📤 Pushing changes...");
+    // Check for uncommitted changes (indicates Claude didn't commit)
+    const statusResult = await Utils.executeGitCommand(
+      ["status", "--porcelain"],
+      { verbose: false, cwd: worktreePath }
+    );
+
+    const hasUncommittedChanges = statusResult.success && statusResult.output && statusResult.output.trim().length > 0;
+
+    if (hasUncommittedChanges) {
+      console.error("❌ Claude left uncommitted changes:");
+      console.error(statusResult.output);
+      console.error("   This usually means Claude hit max turns or failed to complete the task.");
+      return;
+    }
+
+    // Check if there are commits to push
+    const aheadResult = await Utils.executeGitCommand(
+      ["rev-list", "--count", `origin/${branch}..HEAD`],
+      { verbose: false, cwd: worktreePath }
+    );
+
+    const commitsAhead = parseInt(aheadResult.output?.trim() || "0", 10);
+
+    if (commitsAhead === 0) {
+      console.warn("⚠️  No new commits to push - Claude may not have made any changes");
+      // Still continue to mark comments as addressed if Claude determined no changes needed
+    } else {
+      console.log(`📤 Pushing ${commitsAhead} commit(s)...`);
+    }
+
     const pushResult = await Utils.executeGitCommand(
       ["push", "origin", branch],
       { verbose: true, cwd: worktreePath }
@@ -460,7 +493,9 @@ async function processReviewAsync(
       return;
     }
 
-    console.log("✅ Changes pushed successfully");
+    if (commitsAhead > 0) {
+      console.log("✅ Changes pushed successfully");
+    }
 
     // Mark comments as addressed with hooray reaction
     await markCommentsAsAddressed(githubClient, owner, repo, processedComments, config.debug);
