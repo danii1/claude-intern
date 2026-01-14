@@ -558,7 +558,7 @@ async function runClaudeForReview(
 ): Promise<{ success: boolean; message: string; output?: string }> {
   return new Promise((resolve) => {
     const claudePath = process.env.CLAUDE_CLI_PATH || "claude";
-    const maxTurns = parseInt(process.env.CLAUDE_MAX_TURNS || "25", 10);
+    const maxTurns = parseInt(process.env.CLAUDE_MAX_TURNS || "500", 10);
 
     console.log(`   Command: ${claudePath} -p --dangerously-skip-permissions --max-turns ${maxTurns}`);
 
