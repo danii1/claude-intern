@@ -10,50 +10,21 @@
 
 ### Added
 
-- **Webhook Server for Automated PR Reviews**: New webhook server (`serve-webhook`) that automatically addresses PR review feedback
-  - Listens for GitHub PR review events via webhooks
-  - Automatically processes `changes_requested` reviews that mention the bot
-  - Uses dedicated worktree at `/tmp/claude-intern-review-worktree/` for isolation
-  - Supports rate limiting and IP validation for security
-  - Configurable via environment variables (`WEBHOOK_PORT`, `WEBHOOK_SECRET`, etc.)
+- **Webhook Server for Automated PR Reviews**: New `serve-webhook` command that automatically addresses PR review feedback
+  - Listens for GitHub webhook events and processes `changes_requested` reviews when bot is mentioned
+  - SQLite-based persistent queue (`bun:sqlite`) for crash-resilient processing with automatic recovery on restart
+  - Dedicated worktree at `/tmp/claude-intern-review-worktree/` provides isolation from main repository
+  - Automatically detects and installs project dependencies (supports bun, pnpm, npm, yarn, poetry, uv, pip)
+  - Commits attributed to GitHub App bot account (`app-name[bot]`) for clear audit trail
+  - Fetches complete review context including all comments and conversation threads
+  - Posts implementation summaries as PR review replies
+  - Configurable via `WEBHOOK_PORT`, `WEBHOOK_SECRET`, and other environment variables
 
-- **SQLite-Based Persistent Queue**: Crash-resilient webhook processing
-  - Webhook events are persisted to SQLite database using `bun:sqlite`
-  - Automatic recovery of pending events on server restart
-  - Tracks event status (pending/processing/completed/failed)
-  - Configurable retry logic with max retries
-
-- **Address-Review Command**: New `address-review` subcommand for manual PR review handling
-  - Process PR reviews by URL: `claude-intern address-review https://github.com/owner/repo/pull/123`
-  - GitHub App authentication support
-  - Automatic worktree management for isolated processing
-
-- **Bot Attribution for Commits**: Commits made when addressing reviews are attributed to the GitHub App bot
-  - Git author set to `app-name[bot] <id+app-name[bot]@users.noreply.github.com>`
-  - Maintains clear audit trail of automated changes
-
-- **Emoji Reactions for Addressed Comments**: Hooray (🎉) reactions added to review comments after they're addressed
-  - Visual feedback showing which comments have been handled
-  - Tracks addressed comments to avoid duplicate processing
-
-- **Automatic Dependency Installation**: Worktrees automatically install dependencies
-  - Auto-detects package managers: bun, pnpm, npm, yarn, poetry, uv, pip
-  - Runs appropriate install command when preparing worktrees
-
-- **Conversation Comments Support**: PR review feedback now includes conversation/reply comments
-  - Fetches both review comments and general PR comments
-  - Provides Claude with full context of discussions
-
-- **Claude Summary Extraction**: Extracts Claude's implementation summary for PR review replies
-  - Parses Claude's output for summary sections
-  - Includes summary in reply comments for transparency
+- **Address-Review Command**: Manual PR review processing via `claude-intern address-review <pr-url>`
+  - Handles single PR review on-demand without running webhook server
+  - Uses same worktree isolation and dependency installation as webhook server
 
 ### Changed
-
-- **Improved Bot Username Detection**: Fixed GitHub App authentication for bot username lookup
-  - Now correctly calls `/app` endpoint with JWT instead of `/user` with installation token
-  - Returns proper `app-name[bot]` format for GitHub Apps
-  - Supports mentions with or without `[bot]` suffix (e.g., `@claude-intern` or `@claude-intern[bot]`)
 
 - **Review Worktree Location**: Moved from `.claude-intern/review-worktree/` to `/tmp/claude-intern-review-worktree/`
   - Better isolation from main repository
@@ -64,17 +35,11 @@
   - Simplified preparation logic with reduced error noise
   - Single reusable worktree instead of per-PR worktrees
 
-- **Streamlined CLAUDE.md**: Reduced documentation size to minimize context consumption
-
 ### Fixed
 
 - **Fetch All PR Review Comments**: Now fetches all comments from the PR, not just the latest review
   - Ensures Claude sees complete review context
   - Handles pagination for PRs with many comments
-
-- **Git Hook Retry Logic**: Added retry mechanism for git operations during PR review addressing
-  - Handles transient failures gracefully
-  - Prevents failed commits due to hook timing issues
 
 - **Stale Worktree Registration Handling**: Gracefully handles orphaned worktree entries
   - Automatically unregisters worktrees pointing to non-existent directories
