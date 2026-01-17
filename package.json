@@ -62,7 +62,7 @@
     "ultracite": "5.0.49"
   },
   "bin": {
-    "claude-intern": "./dist/index.js"
+    "claude-intern": "dist/index.js"
   },
   "files": [
     "dist/**/*",
