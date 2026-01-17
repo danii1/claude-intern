@@ -1,5 +1,56 @@
 # Claude Intern Changelog
 
+## [2.0.0] - 2025-12-24
+
+### Breaking Changes
+
+- **Bun Runtime Required**: The tool now requires [Bun](https://bun.sh) runtime instead of Node.js
+  - Install via `bun install -g claude-intern` (not npm)
+  - Run directly via `bunx claude-intern` or after global install
+
+### Added
+
+- **Webhook Server for Automated PR Reviews**: New `serve-webhook` command that automatically addresses PR review feedback
+  - Listens for GitHub webhook events and processes `changes_requested` reviews when bot is mentioned
+  - SQLite-based persistent queue (`bun:sqlite`) for crash-resilient processing with automatic recovery on restart
+  - Dedicated worktree at `/tmp/claude-intern-review-worktree/` provides isolation from main repository
+  - Automatically detects and installs project dependencies (supports bun, pnpm, npm, yarn, poetry, uv, pip)
+  - Commits attributed to GitHub App bot account (`app-name[bot]`) for clear audit trail
+  - Fetches complete review context including all comments and conversation threads
+  - Posts implementation summaries as PR review replies
+  - Configurable via `WEBHOOK_PORT`, `WEBHOOK_SECRET`, and other environment variables
+
+- **Address-Review Command**: Manual PR review processing via `claude-intern address-review <pr-url>`
+  - Handles single PR review on-demand without running webhook server
+  - Uses same worktree isolation and dependency installation as webhook server
+
+### Changed
+
+- **Review Worktree Location**: Moved from `.claude-intern/review-worktree/` to `/tmp/claude-intern-review-worktree/`
+  - Better isolation from main repository
+  - Automatic cleanup of stale worktree registrations from old paths
+
+- **Optimized Worktree Operations**: Improved performance for worktree preparation
+  - Shallow clone with `--depth 1` for faster initial setup
+  - Simplified preparation logic with reduced error noise
+  - Single reusable worktree instead of per-PR worktrees
+
+### Fixed
+
+- **Fetch All PR Review Comments**: Now fetches all comments from the PR, not just the latest review
+  - Ensures Claude sees complete review context
+  - Handles pagination for PRs with many comments
+
+- **Stale Worktree Registration Handling**: Gracefully handles orphaned worktree entries
+  - Automatically unregisters worktrees pointing to non-existent directories
+  - Prevents "fatal: is already checked out" errors
+
+### Technical
+
+- **Dependencies**: Added `bun:sqlite` for persistent queue (bundled with Bun runtime)
+- **Build Process**: Updated `build.ts` to target Bun runtime
+- **Documentation**: Updated README.md, USAGE.md, and CLAUDE.md to reflect Bun requirement
+
 ## [1.3.1] - 2025-12-23
 
 ### Added
@@ -276,7 +327,7 @@ Complete workflow orchestration: fetch → format → git → claude → commit 
 
 ### Installation & Usage
 
-- **Global Installation**: `npm install -g claude-intern` or `npx claude-intern`
+- **Global Installation**: `bun install -g claude-intern` or `bunx claude-intern`
 - **Single Task**: `claude-intern PROJ-123`
 - **Multiple Tasks**: `claude-intern PROJ-123 PROJ-124 PROJ-125`
 - **JQL Queries**: `claude-intern --jql "project = PROJ AND status = 'To Do'"`

@@ -12,6 +12,7 @@ import { JiraClient } from "./lib/jira-client";
 import { LockManager } from "./lib/lock-manager";
 import { PRManager } from "./lib/pr-client";
 import { Utils } from "./lib/utils";
+import { runClaudeToFixGitHook } from "./lib/git-hook-fixer";
 import type { ProjectSettings } from "./types/settings";
 
 // Version is injected at build time via --define flag, or read from package.json in dev
@@ -190,9 +191,13 @@ CLAUDE_CLI_PATH=claude
     process.exit(1);
   }
 
-  // Update .gitignore to exclude .claude-intern/.env and lock file
+  // Update .gitignore to exclude .claude-intern/.env, lock file, and review worktree
   const gitignorePath = join(process.cwd(), ".gitignore");
-  const gitignoreEntries = [".claude-intern/.env", ".claude-intern/.env.local", ".claude-intern/.pid.lock"];
+  const gitignoreEntries = [
+    ".claude-intern/.env",
+    ".claude-intern/.env.local",
+    ".claude-intern/.pid.lock"
+  ];
 
   try {
     let gitignoreContent = "";
@@ -321,12 +326,117 @@ function loadEnvironment(envFile?: string): void {
   }
 }
 
-// Check if running init command before parsing
-// This needs to happen early to avoid Commander treating "init" as a task key
+// Check if running subcommands before parsing
+// This needs to happen early to avoid Commander treating them as task keys
 if (process.argv[2] === "init") {
   (async () => {
     await initializeProject();
     process.exit(0);
+  })();
+} else if (process.argv[2] === "serve") {
+  // Handle serve command - start webhook server
+  (async () => {
+    // Load environment for webhook server
+    loadEnvironment();
+
+    // Parse serve-specific options
+    const args = process.argv.slice(3);
+    let port = parseInt(process.env.WEBHOOK_PORT || "3000", 10);
+    let host = process.env.WEBHOOK_HOST || "0.0.0.0";
+
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === "--port" && args[i + 1]) {
+        port = parseInt(args[i + 1], 10);
+        i++;
+      } else if (args[i] === "--host" && args[i + 1]) {
+        host = args[i + 1];
+        i++;
+      } else if (args[i] === "--help" || args[i] === "-h") {
+        console.log("Usage: claude-intern serve [options]");
+        console.log("");
+        console.log("Start the webhook server to automatically address PR review feedback");
+        console.log("");
+        console.log("Options:");
+        console.log("  --port <port>  Port to listen on (default: 3000, or WEBHOOK_PORT env var)");
+        console.log("  --host <host>  Host to bind to (default: 0.0.0.0, or WEBHOOK_HOST env var)");
+        console.log("  -h, --help     Display this help message");
+        console.log("");
+        console.log("Environment variables:");
+        console.log("  WEBHOOK_SECRET      (required) Secret for verifying GitHub webhook signatures");
+        console.log("  WEBHOOK_PORT        Port to listen on (default: 3000)");
+        console.log("  WEBHOOK_HOST        Host to bind to (default: 0.0.0.0)");
+        console.log("  WEBHOOK_AUTO_REPLY  Set to 'true' to automatically reply to review comments");
+        console.log("  WEBHOOK_VALIDATE_IP Set to 'true' to only accept requests from GitHub IPs");
+        console.log("  WEBHOOK_DEBUG       Set to 'true' for verbose logging");
+        console.log("");
+        console.log("See docs/WEBHOOK-DEPLOYMENT.md for deployment instructions.");
+        process.exit(0);
+      }
+    }
+
+    // Import and start webhook server
+    const { startWebhookServer } = await import("./webhook-server");
+    startWebhookServer({ port, host });
+  })();
+} else if (process.argv[2] === "address-review") {
+  // Handle address-review command - manually address PR review feedback
+  (async () => {
+    // Load environment
+    loadEnvironment();
+
+    // Parse address-review options
+    const args = process.argv.slice(3);
+    let prUrl: string | undefined;
+    let noPush = false;
+    let noReply = false;
+    let verbose = false;
+
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === "--no-push") {
+        noPush = true;
+      } else if (args[i] === "--no-reply") {
+        noReply = true;
+      } else if (args[i] === "-v" || args[i] === "--verbose") {
+        verbose = true;
+      } else if (args[i] === "--help" || args[i] === "-h") {
+        console.log("Usage: claude-intern address-review <pr-url> [options]");
+        console.log("");
+        console.log("Manually address PR review feedback using Claude");
+        console.log("");
+        console.log("Arguments:");
+        console.log("  pr-url         GitHub PR URL (e.g., https://github.com/owner/repo/pull/123)");
+        console.log("");
+        console.log("Options:");
+        console.log("  --no-push      Don't push changes after fixing");
+        console.log("  --no-reply     Don't post a reply comment on the PR");
+        console.log("  -v, --verbose  Enable verbose logging");
+        console.log("  -h, --help     Display this help message");
+        console.log("");
+        console.log("Examples:");
+        console.log("  claude-intern address-review https://github.com/owner/repo/pull/123");
+        console.log("  claude-intern address-review https://github.com/owner/repo/pull/123 --no-push");
+        process.exit(0);
+      } else if (!args[i].startsWith("-")) {
+        prUrl = args[i];
+      }
+    }
+
+    if (!prUrl) {
+      console.error("❌ Error: PR URL is required");
+      console.error("");
+      console.error("Usage: claude-intern address-review <pr-url>");
+      console.error("Run 'claude-intern address-review --help' for more information.");
+      process.exit(1);
+    }
+
+    // Import and run address-review
+    const { addressReview } = await import("./lib/address-review");
+    try {
+      await addressReview(prUrl, { noPush, noReply, verbose });
+    } catch (error) {
+      console.error(`❌ Error: ${(error as Error).message}`);
+      process.exit(1);
+    }
   })();
 } else {
   // Load environment variables early (before CLI parsing)
@@ -438,10 +548,14 @@ program
     "10"
   );
 
-program.parse();
+// Only parse with Commander if we're not running a subcommand
+const isSubcommand = ['init', 'serve', 'address-review'].includes(process.argv[2]);
+if (!isSubcommand) {
+  program.parse();
+}
 
-const options = program.opts<ProgramOptions>();
-const taskKeys = program.args;
+const options = isSubcommand ? {} as ProgramOptions : program.opts<ProgramOptions>();
+const taskKeys = isSubcommand ? [] : program.args;
 
 // Reload environment variables if custom env file was specified
 if (options.envFile) {
@@ -751,24 +865,25 @@ async function processSingleTask(
         if (branchResult.success) {
           console.log(`✅ ${branchResult.message}`);
         } else {
-          // Check if the failure is due to uncommitted changes
+          // Branch creation failed - this is critical for safety
+          console.error(`\n❌ Failed to create feature branch: ${branchResult.message}`);
+
           if (branchResult.message.includes("uncommitted changes")) {
-            console.error(`❌ ${branchResult.message}`);
-            console.error(
-              "Please commit or stash your changes before running claude-intern."
-            );
-            console.error(
-              'You can use: git add . && git commit -m "your commit message"'
-            );
-            // Release lock before exiting
-            if (lockManager) {
-              lockManager.release();
-            }
-            process.exit(1);
+            console.error("Please commit or stash your changes before running claude-intern.");
+            console.error('You can use: git add . && git commit -m "your commit message"');
           } else {
-            console.log(`⚠️  ${branchResult.message}`);
-            console.log("Continuing without creating a feature branch...");
+            console.error("Cannot proceed without a feature branch to prevent accidental commits to main/master.");
+            console.error(`\nPlease create a feature branch manually:`);
+            console.error(`   git checkout -b feature/${taskKey.toLowerCase()}`);
+            console.error(`\nThen run claude-intern again with --no-git flag:`);
+            console.error(`   claude-intern ${taskKey} --no-git`);
           }
+
+          // Release lock before exiting
+          if (lockManager) {
+            lockManager.release();
+          }
+          process.exit(1);
         }
       }
 
@@ -1709,220 +1824,6 @@ ${"=".repeat(80)}
   }
 }
 
-// Function to run Claude to fix git hook errors
-async function runClaudeToFixGitHook(
-  hookType: "commit" | "push",
-  claudePath: string,
-  maxTurns: number
-): Promise<boolean> {
-  return new Promise((resolve) => {
-    console.log("\n🔧 Attempting to fix git hook errors with Claude...");
-
-    // Create a concise prompt that asks Claude to re-run the git command
-    // This avoids context length issues from including full error output
-    const gitCommand = hookType === "commit"
-      ? "git commit"
-      : "git push origin HEAD";
-
-    // Get the path to the git-hook-errors.log file
-    const baseOutputDir =
-      process.env.CLAUDE_INTERN_OUTPUT_DIR || "/tmp/claude-intern-tasks";
-    const gitHookErrorLog = `${baseOutputDir}/*/git-hook-errors.log`;
-
-    const fixPrompt = `# Git Hook Error - Fix Required
-
-The git ${hookType} operation has failed, likely due to pre-${hookType} hooks checking code quality.
-
-## Your Task
-
-1. **Review recent hook errors** (optional but helpful):
-   \`\`\`bash
-   tail -n 100 ${gitHookErrorLog}
-   \`\`\`
-   This shows the last 100 lines of previous hook errors to understand patterns.
-
-2. **Run the git command** to see what failed:
-   \`\`\`bash
-   ${gitCommand}
-   \`\`\`
-
-3. **Analyze the error output** and fix all issues. Common problems include:
-   - **Linting errors**: Fix code style, formatting, or linting issues
-   - **Test failures**: Fix failing tests or update test expectations
-   - **Type errors**: Resolve TypeScript or type-checking issues
-   - **Formatting issues**: Run formatters or fix code formatting
-   - **Security issues**: Address security vulnerabilities or dependency issues
-
-4. **Stage your changes** with:
-   \`\`\`bash
-   git add .
-   \`\`\`
-
-5. ${hookType === "commit"
-    ? "**Retry the commit** to verify it succeeds."
-    : "**Amend the existing commit** with your fixes:\n   ```bash\n   git commit --amend --no-edit\n   ```\n\n6. **Verify the fix** by running the push command again to ensure it succeeds."}
-
-**Important**:
-- Only fix the issues mentioned in the error output
-- Do not modify unrelated code
-- Ensure all tests pass if the hook runs tests
-- Follow the project's coding standards and conventions
-${hookType === "push" ? "- Make sure to amend the commit (git commit --amend --no-edit) so the fixes are included in the push" : ""}
-`;
-
-    let stdoutOutput = "";
-    let stderrOutput = "";
-
-    // Spawn Claude process to fix the issues
-    const claude: ChildProcess = spawn(
-      claudePath,
-      [
-        "-p",
-        "--dangerously-skip-permissions",
-        "--max-turns",
-        maxTurns.toString(),
-      ],
-      {
-        stdio: ["pipe", "pipe", "pipe"],
-      }
-    );
-
-    // Capture stdout
-    if (claude.stdout) {
-      claude.stdout.on("data", (data: Buffer) => {
-        const output = data.toString();
-        stdoutOutput += output;
-        process.stdout.write(output);
-      });
-    }
-
-    // Capture stderr
-    if (claude.stderr) {
-      claude.stderr.on("data", (data: Buffer) => {
-        const output = data.toString();
-        stderrOutput += output;
-        process.stderr.write(output);
-      });
-    }
-
-    claude.on("error", (error: NodeJS.ErrnoException) => {
-      console.error(`❌ Failed to run Claude for git hook fix: ${error.message}`);
-      resolve(false);
-    });
-
-    claude.on("close", async (code: number | null) => {
-      if (code === 0) {
-        console.log("\n🔍 Claude completed - verifying the fix actually worked...");
-
-        // Verify the fix by checking git status
-        // For push: Claude should have amended the commit, so we just verify nothing is staged
-        // For commit: Claude should have completed the commit, so we verify a clean state
-        try {
-          const statusResult = await Utils.executeGitCommand(["status", "--porcelain"]);
-
-          if (hookType === "commit") {
-            // For commit fix: verify nothing is staged/modified (commit succeeded)
-            if (statusResult.success && statusResult.output.trim() === "") {
-              console.log("✅ Verification successful - commit completed successfully!");
-              resolve(true);
-            } else {
-              console.log("⚠️  Claude fixed the code but didn't commit - committing manually...");
-              console.log(`   Changes: ${statusResult.output}`);
-
-              // Attempt to stage and commit manually
-              const stageResult = await Utils.executeGitCommand(["add", "."]);
-              if (!stageResult.success) {
-                console.log("❌ Failed to stage changes:");
-                console.log(`   ${stageResult.error}`);
-                resolve(false);
-                return;
-              }
-
-              const commitResult = await Utils.executeGitCommand([
-                "commit", "--no-verify"
-              ]);
-              if (commitResult.success) {
-                console.log("✅ Successfully committed changes manually!");
-                resolve(true);
-              } else {
-                console.log("❌ Failed to commit changes:");
-                console.log(`   ${commitResult.error}`);
-                resolve(false);
-              }
-            }
-          } else {
-            // For push fix: verify changes are committed and ready to push
-            // Claude should have amended, so check if we can push
-            const pushDryRun = await Utils.executeGitCommand([
-              "push", "origin", "HEAD", "--dry-run"
-            ]);
-
-            if (pushDryRun.success) {
-              console.log("✅ Verification successful - changes are committed and ready to push!");
-              resolve(true);
-            } else {
-              console.log("⚠️  Claude fixed the code but didn't amend - amending manually...");
-
-              // Check if there are uncommitted changes to amend
-              const statusCheck = await Utils.executeGitCommand(["status", "--porcelain"]);
-              if (statusCheck.success && statusCheck.output.trim() !== "") {
-                // Stage all changes
-                const stageResult = await Utils.executeGitCommand(["add", "."]);
-                if (!stageResult.success) {
-                  console.log("❌ Failed to stage changes:");
-                  console.log(`   ${stageResult.error}`);
-                  resolve(false);
-                  return;
-                }
-
-                // Amend the commit
-                const amendResult = await Utils.executeGitCommand([
-                  "commit", "--amend", "--no-edit", "--no-verify"
-                ]);
-                if (amendResult.success) {
-                  console.log("✅ Successfully amended commit manually!");
-
-                  // Verify push would work now
-                  const retryPush = await Utils.executeGitCommand([
-                    "push", "origin", "HEAD", "--dry-run"
-                  ]);
-                  if (retryPush.success) {
-                    console.log("✅ Verification successful - ready to push!");
-                    resolve(true);
-                  } else {
-                    console.log("❌ Push would still fail after amend:");
-                    console.log(`   ${retryPush.error || retryPush.output}`);
-                    resolve(false);
-                  }
-                } else {
-                  console.log("❌ Failed to amend commit:");
-                  console.log(`   ${amendResult.error}`);
-                  resolve(false);
-                }
-              } else {
-                console.log("❌ Push dry-run failed but no uncommitted changes to amend:");
-                console.log(`   ${pushDryRun.error || pushDryRun.output}`);
-                resolve(false);
-              }
-            }
-          }
-        } catch (verifyError) {
-          console.log(`❌ Could not verify fix: ${verifyError}`);
-          resolve(false);
-        }
-      } else {
-        console.log(`\n❌ Claude exited with code ${code} while fixing git hook errors`);
-        resolve(false);
-      }
-    });
-
-    // Send the fix prompt to Claude
-    if (claude.stdin) {
-      claude.stdin.write(fixPrompt);
-      claude.stdin.end();
-    }
-  });
-}
 
 // Function to run Claude with the formatted task
 async function runClaude(
@@ -2362,6 +2263,21 @@ async function runClaude(
                     const currentBranch = await Utils.getCurrentBranch();
 
                     if (currentBranch) {
+                      // Safety check: prevent creating PRs from protected branches
+                      if (await Utils.isProtectedBranch(currentBranch)) {
+                        console.error(
+                          `\n❌ Cannot create PR from protected branch '${currentBranch}'`
+                        );
+                        console.error(
+                          "   This indicates a bug - feature branch was not created properly."
+                        );
+                        console.error(
+                          "   Please create a feature branch manually and try again."
+                        );
+                        resolve();
+                        return;
+                      }
+
                       const prResult = await prManager.createPullRequest(
                         issue,
                         currentBranch,
@@ -2523,13 +2439,13 @@ process.on("uncaughtException", (error: Error) => {
 
 // Run the main function (only if not running a subcommand)
 if (require.main === module) {
-  // Check if a subcommand was run (like 'init')
+  // Check if a subcommand was run (like 'init' or 'serve')
   // Commander.js will have the command in process.argv[2]
   const command = process.argv[2];
 
   // If it's a recognized subcommand, don't run main()
-  if (command === 'init') {
-    // Subcommand was handled, don't run main
+  if (command === 'init' || command === 'serve' || command === 'address-review') {
+    // Subcommand was handled earlier, don't run main
   } else {
     // Run main for task processing
     main();

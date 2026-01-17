@@ -1,5 +1,6 @@
 import { spawn } from "child_process";
-import { existsSync, mkdirSync } from "fs";
+import { existsSync, mkdirSync, rmSync } from "fs";
+import { join } from "path";
 
 export class Utils {
   /**
@@ -198,16 +199,20 @@ export class Utils {
    */
   static async executeGitCommand(
     args: string[],
-    options?: { verbose?: boolean }
+    options?: { verbose?: boolean; cwd?: string }
   ): Promise<{ success: boolean; output: string; error?: string }> {
     const verbose = options?.verbose ?? false;
+    const cwd = options?.cwd;
 
     if (verbose) {
-      console.log(`🔧 Executing: git ${args.join(" ")}`);
+      console.log(`🔧 Executing: git ${args.join(" ")}${cwd ? ` (in ${cwd})` : ""}`);
     }
 
     return new Promise((resolve) => {
-      const git = spawn("git", args, { stdio: ["pipe", "pipe", "pipe"] });
+      const git = spawn("git", args, {
+        stdio: ["pipe", "pipe", "pipe"],
+        cwd: cwd || process.cwd()
+      });
 
       let output = "";
       let error = "";
@@ -265,16 +270,16 @@ export class Utils {
   /**
    * Get the current git branch name
    */
-  static async getCurrentBranch(): Promise<string | null> {
-    const result = await Utils.executeGitCommand(["branch", "--show-current"]);
+  static async getCurrentBranch(cwd?: string): Promise<string | null> {
+    const result = await Utils.executeGitCommand(["branch", "--show-current"], { cwd });
     return result.success ? result.output : null;
   }
 
   /**
    * Check if there are uncommitted changes
    */
-  static async hasUncommittedChanges(): Promise<boolean> {
-    const result = await Utils.executeGitCommand(["status", "--porcelain"]);
+  static async hasUncommittedChanges(cwd?: string): Promise<boolean> {
+    const result = await Utils.executeGitCommand(["status", "--porcelain"], { cwd });
     return result.success && result.output.length > 0;
   }
 
@@ -287,10 +292,12 @@ export class Utils {
     options?: {
       verbose?: boolean;
       author?: { name: string; email: string };
+      cwd?: string;
     }
   ): Promise<{ success: boolean; message: string; hookError?: string }> {
     const verbose = options?.verbose ?? false;
     const author = options?.author;
+    const cwd = options?.cwd;
 
     try {
       // Check if we're in a git repository
@@ -301,8 +308,17 @@ export class Utils {
         };
       }
 
+      // Safety check: prevent commits directly to protected branches
+      const currentBranch = await Utils.getCurrentBranch();
+      if (currentBranch && await Utils.isProtectedBranch(currentBranch)) {
+        return {
+          success: false,
+          message: `Cannot commit directly to protected branch '${currentBranch}'. Please create a feature branch first.`,
+        };
+      }
+
       // Check if there are any changes to commit
-      if (!(await Utils.hasUncommittedChanges())) {
+      if (!(await Utils.hasUncommittedChanges(cwd))) {
         return {
           success: false,
           message: "No changes to commit",
@@ -310,7 +326,7 @@ export class Utils {
       }
 
       // Add all changes
-      const addResult = await Utils.executeGitCommand(["add", "."], { verbose });
+      const addResult = await Utils.executeGitCommand(["add", "."], { verbose, cwd });
       if (!addResult.success) {
         return {
           success: false,
@@ -333,7 +349,7 @@ export class Utils {
       commitArgs.push("commit", "-m", commitMessage);
 
       // Commit changes
-      const commitResult = await Utils.executeGitCommand(commitArgs, { verbose });
+      const commitResult = await Utils.executeGitCommand(commitArgs, { verbose, cwd });
       if (commitResult.success) {
         return {
           success: true,
@@ -488,20 +504,29 @@ export class Utils {
   /**
    * Push current branch to remote repository
    */
-  static async pushCurrentBranch(options?: { verbose?: boolean }): Promise<{
+  static async pushCurrentBranch(options?: { verbose?: boolean; cwd?: string }): Promise<{
     success: boolean;
     message: string;
     hookError?: string;
   }> {
     const verbose = options?.verbose ?? false;
+    const cwd = options?.cwd;
 
     try {
-      // Get current branch name
-      const currentBranch = await Utils.getCurrentBranch();
+      // Get current branch name (from the specified working directory)
+      const currentBranch = await Utils.getCurrentBranch(cwd);
       if (!currentBranch) {
         return {
           success: false,
           message: "Could not determine current branch",
+        };
+      }
+
+      // Safety check: prevent pushing protected branches (this is unusual but could happen)
+      if (await Utils.isProtectedBranch(currentBranch)) {
+        return {
+          success: false,
+          message: `Cannot push protected branch '${currentBranch}'. This should not happen - please create a feature branch.`,
         };
       }
 
@@ -515,7 +540,7 @@ export class Utils {
         "--heads",
         "origin",
         currentBranch,
-      ], { verbose });
+      ], { verbose, cwd });
 
       let pushResult;
       if (remoteBranchExists.success && remoteBranchExists.output.trim()) {
@@ -524,7 +549,7 @@ export class Utils {
           "push",
           "origin",
           currentBranch,
-        ], { verbose });
+        ], { verbose, cwd });
         if (pushResult.success) {
           return {
             success: true,
@@ -538,7 +563,7 @@ export class Utils {
           "-u",
           "origin",
           currentBranch,
-        ], { verbose });
+        ], { verbose, cwd });
         if (pushResult.success) {
           return {
             success: true,
@@ -584,6 +609,23 @@ export class Utils {
   }
 
   /**
+   * Check if the current branch is a protected branch (main/master/develop)
+   */
+  static async isProtectedBranch(branch?: string): Promise<boolean> {
+    try {
+      const currentBranch = branch || (await Utils.getCurrentBranch());
+      if (!currentBranch) {
+        return false;
+      }
+
+      const protectedBranches = ["main", "master", "develop", "development", "staging", "production"];
+      return protectedBranches.includes(currentBranch.toLowerCase());
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /**
    * Create and checkout a new feature branch for the task
    */
   static async createFeatureBranch(
@@ -604,19 +646,30 @@ export class Utils {
         };
       }
 
-      // Check for uncommitted changes
-      if (await Utils.hasUncommittedChanges()) {
-        return {
-          success: false,
-          branchName,
-          message:
-            "There are uncommitted changes. Please commit or stash them before creating a feature branch.",
-        };
+      // Clean up any uncommitted changes and untracked files before creating branch
+      // This ensures a clean state for the new feature branch
+      console.log("🧹 Cleaning up working directory before creating feature branch...");
+
+      // Reset any staged or modified files
+      const resetResult = await Utils.executeGitCommand(["reset", "--hard", "HEAD"]);
+      if (!resetResult.success) {
+        console.warn(`⚠️  Failed to reset changes: ${resetResult.error}`);
       }
+
+      // Remove untracked files and directories
+      const cleanResult = await Utils.executeGitCommand(["clean", "-fd"]);
+      if (!cleanResult.success) {
+        console.warn(`⚠️  Failed to clean untracked files: ${cleanResult.error}`);
+      }
+
+      console.log("✅ Working directory cleaned");
 
       // Switch to target branch first (or main/master if not specified)
       let targetBranch = baseBranch || (await Utils.getMainBranchName());
       const currentBranch = await Utils.getCurrentBranch();
+
+      // Track whether we should create branch from remote ref instead of local checkout
+      let createFromRemote = false;
 
       if (currentBranch !== targetBranch) {
         let switchResult = await Utils.executeGitCommand([
@@ -645,7 +698,11 @@ export class Utils {
           }
         }
 
-        if (!switchResult.success) {
+        // Handle worktree conflict - target branch is locked by another worktree
+        if (!switchResult.success && switchResult.error?.includes("already used by worktree")) {
+          console.log(`⚠️  Target branch '${targetBranch}' is locked by a worktree, will create branch from remote...`);
+          createFromRemote = true;
+        } else if (!switchResult.success) {
           return {
             success: false,
             branchName,
@@ -654,17 +711,32 @@ export class Utils {
         }
       }
 
-      // Ensure target branch is up to date with remote
-      console.log(`📥 Pulling latest changes for target branch '${targetBranch}'...`);
-      const pullResult = await Utils.executeGitCommand([
-        "pull",
-        "origin",
-        targetBranch,
-      ]);
+      // Fetch and update target branch
+      if (createFromRemote) {
+        // Fetch the target branch from remote without checking it out
+        console.log(`📥 Fetching latest '${targetBranch}' from remote...`);
+        const fetchResult = await Utils.executeGitCommand([
+          "fetch",
+          "origin",
+          `${targetBranch}:refs/remotes/origin/${targetBranch}`,
+        ]);
+        if (!fetchResult.success) {
+          console.log(`⚠️  Failed to fetch '${targetBranch}': ${fetchResult.error}`);
+          console.log("   Will try to create branch from local reference...");
+        }
+      } else {
+        // Ensure target branch is up to date with remote
+        console.log(`📥 Pulling latest changes for target branch '${targetBranch}'...`);
+        const pullResult = await Utils.executeGitCommand([
+          "pull",
+          "origin",
+          targetBranch,
+        ]);
 
-      if (!pullResult.success) {
-        console.log(`⚠️  Failed to pull latest changes for '${targetBranch}': ${pullResult.error}`);
-        console.log("   Continuing with local version of the branch...");
+        if (!pullResult.success) {
+          console.log(`⚠️  Failed to pull latest changes for '${targetBranch}': ${pullResult.error}`);
+          console.log("   Continuing with local version of the branch...");
+        }
       }
 
       // Find an available branch name by checking for existing branches
@@ -686,12 +758,118 @@ export class Utils {
         branchName = `${baseBranchName}-attempt-${attemptCounter}`;
       }
 
-      // Create and checkout new branch from target branch
-      const createResult = await Utils.executeGitCommand([
-        "checkout",
-        "-b",
-        branchName,
+      // Check if the branch is being used by a worktree and clean it up if needed
+      const worktreeListResult = await Utils.executeGitCommand([
+        "worktree",
+        "list",
+        "--porcelain",
       ]);
+
+      if (worktreeListResult.success && worktreeListResult.output.includes(`branch refs/heads/${branchName}`)) {
+        console.log(`⚠️  Branch '${branchName}' is checked out in a worktree, cleaning up...`);
+
+        // Find the worktree path for this branch
+        const lines = worktreeListResult.output.split("\n");
+        let worktreeToRemove: string | null = null;
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i].startsWith("worktree ")) {
+            const path = lines[i].substring("worktree ".length);
+            // Check if this worktree has our branch
+            for (let j = i + 1; j < lines.length && !lines[j].startsWith("worktree "); j++) {
+              if (lines[j] === `branch refs/heads/${branchName}`) {
+                worktreeToRemove = path;
+                break;
+              }
+            }
+            if (worktreeToRemove) break;
+          }
+        }
+
+        if (worktreeToRemove) {
+          // Remove the worktree
+          const removeResult = await Utils.executeGitCommand([
+            "worktree",
+            "remove",
+            worktreeToRemove,
+            "--force",
+          ]);
+
+          if (!removeResult.success) {
+            // Try to forcibly delete the worktree directory and prune
+            try {
+              rmSync(worktreeToRemove, { recursive: true, force: true });
+            } catch (e) {
+              // Ignore deletion errors
+            }
+            await Utils.executeGitCommand(["worktree", "prune"]);
+          }
+          console.log(`✅ Cleaned up worktree at ${worktreeToRemove}`);
+        }
+
+        // Delete the branch if it still exists (it might after worktree removal)
+        await Utils.executeGitCommand(["branch", "-D", branchName]);
+      }
+
+      // Create and checkout new branch from target branch
+      // When createFromRemote is true, we couldn't checkout targetBranch (worktree conflict),
+      // so create from the remote or local reference instead
+      const createFromRef = createFromRemote
+        ? `origin/${targetBranch}`
+        : undefined; // undefined means create from HEAD (current branch)
+
+      let createResult = await Utils.executeGitCommand(
+        createFromRef
+          ? ["checkout", "-b", branchName, createFromRef]
+          : ["checkout", "-b", branchName]
+      );
+
+      // If creating from remote ref failed, try the local branch ref
+      if (!createResult.success && createFromRemote) {
+        console.log(`⚠️  Failed to create from origin/${targetBranch}, trying local ref...`);
+        createResult = await Utils.executeGitCommand([
+          "checkout",
+          "-b",
+          branchName,
+          targetBranch,
+        ]);
+      }
+
+      // Handle worktree conflict that wasn't caught by the proactive check
+      if (!createResult.success && createResult.error?.includes("already used by worktree")) {
+        console.log(`⚠️  Branch '${branchName}' is still locked by a worktree, forcing cleanup...`);
+
+        // Extract worktree path from error message
+        const match = createResult.error.match(/already used by worktree at '([^']+)'/);
+        if (match) {
+          const worktreePath = match[1];
+
+          // Force remove the worktree
+          await Utils.executeGitCommand(["worktree", "remove", worktreePath, "--force"]);
+
+          // Also try to delete directory if still exists
+          try {
+            rmSync(worktreePath, { recursive: true, force: true });
+          } catch (e) {
+            // Ignore
+          }
+
+          // Prune worktree registry
+          await Utils.executeGitCommand(["worktree", "prune"]);
+
+          // Delete the branch
+          await Utils.executeGitCommand(["branch", "-D", branchName]);
+
+          console.log(`✅ Force cleaned up worktree at ${worktreePath}`);
+
+          // Retry branch creation with same ref strategy
+          createResult = await Utils.executeGitCommand(
+            createFromRef
+              ? ["checkout", "-b", branchName, createFromRef]
+              : ["checkout", "-b", branchName]
+          );
+        }
+      }
+
       if (createResult.success) {
         const message =
           attemptCounter === 1
@@ -714,6 +892,466 @@ export class Utils {
         success: false,
         branchName,
         message: `Git operation failed: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Remove a git worktree and clean up its directory.
+   */
+  static async removeReviewWorktree(
+    worktreePath: string,
+    options?: { verbose?: boolean }
+  ): Promise<{ success: boolean; error?: string }> {
+    const verbose = options?.verbose ?? false;
+
+    try {
+      if (!existsSync(worktreePath)) {
+        if (verbose) {
+          console.log(`⏭️  Worktree does not exist: ${worktreePath}`);
+        }
+        return { success: true };
+      }
+
+      if (verbose) {
+        console.log(`\n🗑️  Removing worktree: ${worktreePath}`);
+      }
+
+      // Try to remove via git first
+      const removeResult = await Utils.executeGitCommand(
+        ["worktree", "remove", worktreePath, "--force"],
+        { verbose }
+      );
+
+      if (!removeResult.success) {
+        if (verbose) {
+          console.log(`   Git worktree remove failed, deleting directory...`);
+        }
+        // Forcefully delete the directory
+        rmSync(worktreePath, { recursive: true, force: true });
+      }
+
+      if (verbose) {
+        console.log(`✅ Worktree removed successfully`);
+      }
+
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: `Worktree removal failed: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Prepare the single review worktree for webhook processing.
+   * Reuses `/tmp/claude-intern-review-worktree/` (singular) and switches branches.
+   * Much more efficient than creating/removing worktrees for each review.
+   *
+   * Automatically cleans up stale worktree registrations (e.g., from old paths).
+   */
+  static async prepareReviewWorktree(
+    branch: string,
+    options?: { verbose?: boolean }
+  ): Promise<{ success: boolean; path?: string; error?: string }> {
+    const verbose = options?.verbose ?? false;
+
+    try {
+      // Single worktree path - reused across all webhook reviews
+      const worktreePath = Utils.getReviewWorktreePath();
+
+      if (verbose) {
+        console.log(`\n📂 Preparing review worktree for branch: ${branch}`);
+        console.log(`   Worktree path: ${worktreePath}`);
+      }
+
+      // Fetch latest from origin (shallow fetch to minimize data transfer)
+      if (verbose) {
+        console.log(`   Fetching branch ${branch} from origin (shallow)...`);
+      }
+
+      const fetchResult = await Utils.executeGitCommand(
+        ["fetch", "origin", branch, "--depth=1"],
+        { verbose }
+      );
+
+      if (verbose) {
+        console.log(`   ✓ Fetch completed (success: ${fetchResult.success})`);
+      }
+
+      if (!fetchResult.success) {
+        console.warn(`⚠️  Fetch failed: ${fetchResult.error || fetchResult.output}`);
+        console.warn(`   Continuing anyway - worktree may have cached version...`);
+      }
+
+      // Check if worktree directory exists on filesystem
+      const worktreeExists = existsSync(worktreePath);
+
+      if (verbose) {
+        console.log(`   Worktree directory exists: ${worktreeExists}`);
+      }
+
+      if (worktreeExists) {
+        // Check if it's a valid git worktree by testing if .git exists and is valid
+        const gitFileExists = existsSync(join(worktreePath, ".git"));
+
+        if (gitFileExists) {
+          // Try to verify it's a valid worktree
+          const statusCheck = await Utils.executeGitCommand(
+            ["status", "--porcelain"],
+            { verbose: false, cwd: worktreePath }
+          );
+
+          if (statusCheck.success) {
+            // Valid worktree - switch branch
+            if (verbose) {
+              console.log(`   Switching to branch ${branch}...`);
+            }
+
+            // Check if origin remote exists
+            const originCheck = await Utils.executeGitCommand(
+              ["remote", "get-url", "origin"],
+              { verbose: false, cwd: worktreePath }
+            );
+            const hasOrigin = originCheck.success;
+
+            let switchResult;
+            if (hasOrigin) {
+              // Try checkout with -B to force create/reset branch tracking origin
+              switchResult = await Utils.executeGitCommand(
+                ["checkout", "-B", branch, "--track", `origin/${branch}`],
+                { verbose, cwd: worktreePath }
+              );
+            } else {
+              // No origin - just checkout the local branch
+              switchResult = await Utils.executeGitCommand(
+                ["checkout", branch],
+                { verbose, cwd: worktreePath }
+              );
+            }
+
+            if (switchResult.success) {
+              // Pull latest changes if origin exists
+              if (hasOrigin) {
+                if (verbose) {
+                  console.log(`   Pulling latest changes...`);
+                }
+                await Utils.executeGitCommand(
+                  ["pull", "origin", branch, "--ff-only"],
+                  { verbose, cwd: worktreePath }
+                );
+              }
+
+              if (verbose) {
+                console.log(`✅ Switched to branch ${branch}`);
+              }
+
+              // Install dependencies
+              if (verbose) {
+                console.log(`📦 Installing dependencies...`);
+              }
+              const installResult = await Utils.installDependencies(worktreePath, { verbose });
+
+              if (!installResult.success) {
+                console.warn(`⚠️  Failed to install dependencies: ${installResult.error}`);
+                console.warn(`   Claude may not be able to run tests or build commands`);
+              }
+
+              return { success: true, path: worktreePath };
+            }
+          }
+        }
+
+        // Worktree is corrupted or invalid - clean it up
+        if (verbose) {
+          console.log(`   Worktree is invalid/corrupted, cleaning up...`);
+        }
+
+        // Remove from git's worktree registry (ignore errors)
+        await Utils.executeGitCommand(
+          ["worktree", "remove", worktreePath, "--force"],
+          { verbose: false }
+        );
+
+        // Remove directory itself (ignore errors)
+        try {
+          rmSync(worktreePath, { recursive: true, force: true });
+        } catch (e) {
+          // Ignore
+        }
+
+        // Prune any stale worktree registrations
+        await Utils.executeGitCommand(["worktree", "prune"], { verbose: false });
+      }
+
+      // Create new worktree
+      if (verbose) {
+        console.log(`   Creating worktree at ${worktreePath}...`);
+      }
+
+      // Check if the branch exists locally
+      const localBranchCheck = await Utils.executeGitCommand(
+        ["show-ref", "--verify", `refs/heads/${branch}`],
+        { verbose: false }
+      );
+
+      // Check if origin remote exists
+      const originCheck = await Utils.executeGitCommand(
+        ["remote", "get-url", "origin"],
+        { verbose: false }
+      );
+      const hasOrigin = originCheck.success;
+
+      let createResult;
+
+      if (hasOrigin) {
+        // With origin - try to create worktree tracking origin branch
+        if (localBranchCheck.success) {
+          // Local branch exists - delete it first to avoid conflicts
+          await Utils.executeGitCommand(
+            ["branch", "-D", branch],
+            { verbose: false }
+          );
+        }
+
+        createResult = await Utils.executeGitCommand(
+          ["worktree", "add", "--track", "-b", branch, worktreePath, `origin/${branch}`],
+          { verbose }
+        );
+      } else {
+        // No origin - use local branch
+        createResult = await Utils.executeGitCommand(
+          ["worktree", "add", worktreePath, branch],
+          { verbose }
+        );
+      }
+
+      if (!createResult.success) {
+        // If creation failed, it might be due to stale registrations - clean up
+        const errorMsg = (createResult.error || "") + (createResult.output || "");
+
+        if (errorMsg.includes("already registered") || errorMsg.includes("missing but")) {
+          if (verbose) {
+            console.log(`   Cleaning up stale worktree registrations...`);
+          }
+
+          // Prune stale worktrees silently
+          await Utils.executeGitCommand(["worktree", "prune"], { verbose: false });
+
+          // Delete the local branch if it exists (may have been created by the failed first attempt)
+          await Utils.executeGitCommand(["branch", "-D", branch], { verbose: false });
+
+          // Try again after pruning
+          if (hasOrigin) {
+            createResult = await Utils.executeGitCommand(
+              ["worktree", "add", "--track", "-b", branch, worktreePath, `origin/${branch}`],
+              { verbose }
+            );
+          } else {
+            createResult = await Utils.executeGitCommand(
+              ["worktree", "add", worktreePath, branch],
+              { verbose }
+            );
+          }
+        }
+
+        if (!createResult.success) {
+          return {
+            success: false,
+            error: `Failed to create worktree: ${createResult.error || createResult.output}`,
+          };
+        }
+      }
+
+      if (verbose) {
+        console.log(`✅ Worktree ready at ${worktreePath}`);
+      }
+
+      // Install dependencies to ensure Claude has everything needed
+      if (verbose) {
+        console.log(`📦 Installing dependencies...`);
+      }
+      const installResult = await Utils.installDependencies(worktreePath, { verbose });
+
+      if (verbose) {
+        console.log(`   ✓ Dependency installation completed (success: ${installResult.success})`);
+      }
+
+      if (!installResult.success) {
+        // Log warning but don't fail - Claude can still work without dependencies in some cases
+        console.warn(`⚠️  Failed to install dependencies: ${installResult.error}`);
+        console.warn(`   Claude may not be able to run tests or build commands`);
+      }
+
+      if (verbose) {
+        console.log(`✅ Worktree preparation complete!`);
+      }
+
+      return { success: true, path: worktreePath };
+    } catch (error) {
+      return {
+        success: false,
+        error: `Worktree preparation failed: ${(error as Error).message}`,
+      };
+    }
+  }
+
+  /**
+   * Get the path to the single review worktree.
+   */
+  static getReviewWorktreePath(): string {
+    return "/tmp/claude-intern-review-worktree";
+  }
+
+  /**
+   * Detect and run the appropriate package manager to install dependencies.
+   * Supports: JavaScript/TypeScript (bun, pnpm, yarn, npm), Python (poetry, pip),
+   * Ruby (bundle), Go (go mod), Rust (cargo), PHP (composer), and Java (maven, gradle).
+   * Returns true if dependencies were installed successfully.
+   */
+  static async installDependencies(
+    workingDir: string,
+    options?: { verbose?: boolean }
+  ): Promise<{ success: boolean; packageManager?: string; error?: string }> {
+    const verbose = options?.verbose ?? false;
+
+    // Define package managers for each language/ecosystem
+    const packageManagers = [
+      // JavaScript/TypeScript (only with lock files)
+      { name: "bun", manifestFile: "package.json", lockFile: "bun.lockb", command: "bun", args: ["install"] },
+      { name: "pnpm", manifestFile: "package.json", lockFile: "pnpm-lock.yaml", command: "pnpm", args: ["install", "--frozen-lockfile"] },
+      { name: "yarn", manifestFile: "package.json", lockFile: "yarn.lock", command: "yarn", args: ["install", "--frozen-lockfile"] },
+      { name: "npm", manifestFile: "package.json", lockFile: "package-lock.json", command: "npm", args: ["ci"] },
+
+      // Python
+      { name: "uv", manifestFile: "pyproject.toml", lockFile: "uv.lock", command: "uv", args: ["sync"] },
+      { name: "poetry", manifestFile: "pyproject.toml", lockFile: "poetry.lock", command: "poetry", args: ["install", "--no-root"] },
+      { name: "pip", manifestFile: "requirements.txt", lockFile: null, command: "pip", args: ["install", "-r", "requirements.txt"] },
+      { name: "pipenv", manifestFile: "Pipfile", lockFile: "Pipfile.lock", command: "pipenv", args: ["install", "--deploy"] },
+
+      // Ruby
+      { name: "bundle", manifestFile: "Gemfile", lockFile: "Gemfile.lock", command: "bundle", args: ["install"] },
+
+      // Go
+      { name: "go", manifestFile: "go.mod", lockFile: "go.sum", command: "go", args: ["mod", "download"] },
+
+      // Rust
+      { name: "cargo", manifestFile: "Cargo.toml", lockFile: "Cargo.lock", command: "cargo", args: ["fetch"] },
+
+      // PHP
+      { name: "composer", manifestFile: "composer.json", lockFile: "composer.lock", command: "composer", args: ["install", "--no-interaction"] },
+
+      // Java (no lock files, so only install if we find these files)
+      { name: "maven", manifestFile: "pom.xml", lockFile: null, command: "mvn", args: ["dependency:resolve"] },
+      { name: "gradle", manifestFile: "build.gradle", lockFile: null, command: "gradle", args: ["dependencies", "--quiet"] },
+      { name: "gradle", manifestFile: "build.gradle.kts", lockFile: null, command: "gradle", args: ["dependencies", "--quiet"] },
+    ];
+
+    // Find all applicable package managers for this project
+    // Prioritize those with lock files, only use manifest-only as fallback
+    const pmsWithLock = packageManagers.filter((pm) => {
+      const manifestExists = existsSync(join(workingDir, pm.manifestFile));
+      if (!manifestExists) return false;
+
+      if (pm.lockFile) {
+        return existsSync(join(workingDir, pm.lockFile));
+      }
+
+      return false;
+    });
+
+    const pmsWithoutLock = packageManagers.filter((pm) => {
+      const manifestExists = existsSync(join(workingDir, pm.manifestFile));
+      if (!manifestExists) return false;
+
+      // Only include if no lock file is required
+      return pm.lockFile === null;
+    });
+
+    // Prefer package managers with lock files, otherwise use manifest-only ones
+    const applicablePMs = pmsWithLock.length > 0 ? pmsWithLock : pmsWithoutLock;
+
+    if (applicablePMs.length === 0) {
+      // No package manager files found - nothing to install
+      return { success: true };
+    }
+
+    // Install dependencies for each detected package manager
+    const results: Array<{ success: boolean; packageManager: string; error?: string }> = [];
+
+    for (const pm of applicablePMs) {
+      if (verbose) {
+        console.log(`   Installing ${pm.name} dependencies...`);
+      }
+
+      const result = await new Promise<{ success: boolean; packageManager: string; error?: string }>((resolve) => {
+        const proc = spawn(pm.command, pm.args, {
+          cwd: workingDir,
+          stdio: verbose ? "inherit" : "pipe",
+        });
+
+        let errorOutput = "";
+
+        if (!verbose) {
+          // Must consume both stdout and stderr to prevent pipe buffer deadlock
+          // When the buffer fills up (typically 64KB), the process blocks
+          if (proc.stdout) {
+            proc.stdout.on("data", () => {
+              // Discard stdout when not verbose, just keep draining the buffer
+            });
+          }
+          if (proc.stderr) {
+            proc.stderr.on("data", (data: Buffer) => {
+              errorOutput += data.toString();
+            });
+          }
+        }
+
+        proc.on("error", (error: NodeJS.ErrnoException) => {
+          resolve({
+            success: false,
+            packageManager: pm.name,
+            error: `Failed to run ${pm.name}: ${error.message}`,
+          });
+        });
+
+        proc.on("close", (code: number | null) => {
+          if (code === 0) {
+            if (verbose) {
+              console.log(`   ✅ ${pm.name} dependencies installed`);
+            }
+            resolve({
+              success: true,
+              packageManager: pm.name,
+            });
+          } else {
+            resolve({
+              success: false,
+              packageManager: pm.name,
+              error: `${pm.name} exited with code ${code}${errorOutput ? `\n${errorOutput}` : ""}`,
+            });
+          }
+        });
+      });
+
+      results.push(result);
+    }
+
+    // Consider overall success if at least one package manager succeeded
+    const anySuccess = results.some((r) => r.success);
+    const allErrors = results.filter((r) => !r.success).map((r) => r.error).join("; ");
+
+    if (anySuccess) {
+      return {
+        success: true,
+        packageManager: results.filter((r) => r.success).map((r) => r.packageManager).join(", "),
+      };
+    } else {
+      return {
+        success: false,
+        packageManager: results.map((r) => r.packageManager).join(", "),
+        error: allErrors,
       };
     }
   }
