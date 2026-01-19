@@ -13,6 +13,7 @@ import { LockManager } from "./lib/lock-manager";
 import { PRManager } from "./lib/pr-client";
 import { Utils } from "./lib/utils";
 import { runClaudeToFixGitHook } from "./lib/git-hook-fixer";
+import { runAutoReviewLoop } from "./lib/auto-review-loop";
 import type { ProjectSettings } from "./types/settings";
 
 // Version is injected at build time via --define flag, or read from package.json in dev
@@ -34,6 +35,8 @@ interface ProgramOptions {
   skipClarityCheck: boolean; // New option to skip clarity check
   createPr: boolean; // New option to create pull request
   prTargetBranch: string; // Target branch for PR
+  autoReview: boolean; // New option to run automatic PR review loop
+  autoReviewIterations: string; // Max iterations for auto-review loop
   jql?: string; // JQL query for batch processing
   skipJiraComments: boolean; // New option to skip posting comments to JIRA
   hookRetries: string; // Number of retries for git hook failures
@@ -539,6 +542,15 @@ program
     "main"
   )
   .option(
+    "--auto-review",
+    "Run automatic PR review loop after creating PR (requires --create-pr)"
+  )
+  .option(
+    "--auto-review-iterations <number>",
+    "Maximum iterations for auto-review loop",
+    "5"
+  )
+  .option(
     "--skip-jira-comments",
     "Skip posting comments to JIRA (for testing)"
   )
@@ -1002,7 +1014,9 @@ async function processSingleTask(
         options.skipJiraComments,
         Number.parseInt(options.hookRetries),
         projectSettings,
-        gitAuthor
+        gitAuthor,
+        options.autoReview,
+        Number.parseInt(options.autoReviewIterations)
       );
     } else {
       console.log("\n✅ Task details saved. You can now:");
@@ -1840,7 +1854,9 @@ async function runClaude(
   skipJiraComments = false,
   hookRetries = 10,
   projectSettings: ProjectSettings | null = null,
-  gitAuthor?: { name: string; email: string }
+  gitAuthor?: { name: string; email: string },
+  autoReview = false,
+  autoReviewIterations = 5
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     // Check if task file exists
@@ -2320,6 +2336,50 @@ async function runClaude(
                           console.log(
                             "\n⏭️  Skipping JIRA status transition (--skip-jira-comments)"
                           );
+                        }
+
+                        // Run automatic PR review loop if requested
+                        if (autoReview && prResult.url) {
+                          try {
+                            // Parse PR URL to extract repository and PR number
+                            // Format: https://github.com/owner/repo/pull/123 or https://bitbucket.org/workspace/repo/pull-requests/123
+                            const prUrlMatch = prResult.url.match(/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/);
+
+                            if (prUrlMatch) {
+                              const repository = prUrlMatch[1];
+                              const prNumber = parseInt(prUrlMatch[2], 10);
+
+                              // Calculate task output directory
+                              const baseOutputDir =
+                                process.env.CLAUDE_INTERN_OUTPUT_DIR || "/tmp/claude-intern-tasks";
+                              const taskDir = taskKey
+                                ? join(baseOutputDir, taskKey.toLowerCase())
+                                : join(baseOutputDir, `pr-${prNumber}`);
+
+                              const autoReviewResult = await runAutoReviewLoop({
+                                repository,
+                                prNumber,
+                                prBranch: currentBranch,
+                                claudePath,
+                                maxIterations: autoReviewIterations,
+                                minPriority: 'medium',
+                                workingDir: process.cwd(),
+                                outputDir: taskDir,
+                              });
+
+                              // Save final summary
+                              const summaryPath = join(taskDir, 'auto-review-summary.json');
+                              writeFileSync(summaryPath, JSON.stringify(autoReviewResult, null, 2));
+                              console.log(`\n📄 Auto-review summary saved to: ${summaryPath}`);
+                            } else {
+                              console.log('\n⚠️  Could not parse PR URL for auto-review. Only GitHub PRs are supported.');
+                            }
+                          } catch (autoReviewError) {
+                            console.warn(
+                              `\n⚠️  Auto-review loop failed: ${(autoReviewError as Error).message}`
+                            );
+                            console.log('   PR was created successfully, but auto-review failed');
+                          }
                         }
                       } else {
                         console.log(
