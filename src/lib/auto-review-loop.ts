@@ -134,11 +134,44 @@ ${itemsList}
 }
 
 /**
- * Get PR diff using gh CLI
+ * Get PR diff using git diff against the base branch.
+ * This avoids needing GH_TOKEN for gh CLI.
  */
 function getPRDiff(repository: string, prNumber: number, workingDir: string): string {
   try {
-    const result = execSync(`gh pr diff ${prNumber} --repo ${repository}`, {
+    // Fetch latest from origin to ensure we have up-to-date refs
+    try {
+      execSync('git fetch origin', {
+        cwd: workingDir,
+        encoding: 'utf-8',
+        stdio: 'pipe',
+      });
+    } catch {
+      // Ignore fetch errors - we may be offline or origin may not exist
+    }
+
+    // Try to determine the base branch (main or master)
+    let baseBranch = 'origin/main';
+    try {
+      execSync('git rev-parse --verify origin/main', {
+        cwd: workingDir,
+        encoding: 'utf-8',
+        stdio: 'pipe',
+      });
+    } catch {
+      // main doesn't exist, try master
+      baseBranch = 'origin/master';
+    }
+
+    // Get the merge base to find where the PR branch diverged
+    const mergeBase = execSync(`git merge-base HEAD ${baseBranch}`, {
+      cwd: workingDir,
+      encoding: 'utf-8',
+      stdio: 'pipe',
+    }).trim();
+
+    // Get diff from merge base to HEAD
+    const result = execSync(`git diff ${mergeBase}..HEAD`, {
       cwd: workingDir,
       encoding: 'utf-8',
       maxBuffer: 10 * 1024 * 1024, // 10MB
