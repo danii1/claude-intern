@@ -1,5 +1,6 @@
 import { createSign } from "crypto";
 import { readFileSync } from "fs";
+import { Utils } from "./utils";
 
 export interface GitHubAppConfig {
   appId: string;
@@ -150,7 +151,7 @@ export class GitHubAppAuth {
     const jwt = this.generateJWT();
     const url = `${this.baseUrl}/repos/${owner}/${repo}/installation`;
 
-    const response = await fetch(url, {
+    const response = await Utils.fetchWithRetry(url, {
       method: "GET",
       headers: {
         Authorization: `Bearer ${jwt}`,
@@ -187,7 +188,7 @@ export class GitHubAppAuth {
     const jwt = this.generateJWT();
     const url = `${this.baseUrl}/app/installations/${installationId}/access_tokens`;
 
-    const response = await fetch(url, {
+    const response = await Utils.fetchWithRetry(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${jwt}`,
@@ -222,7 +223,7 @@ export class GitHubAppAuth {
     const jwt = this.generateJWT();
     const url = `${this.baseUrl}/app`;
 
-    const response = await fetch(url, {
+    const response = await Utils.fetchWithRetry(url, {
       method: "GET",
       headers: {
         Authorization: `Bearer ${jwt}`,

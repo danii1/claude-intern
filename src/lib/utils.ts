@@ -117,6 +117,131 @@ export class Utils {
   }
 
   /**
+   * HTTP status codes that should trigger a retry
+   */
+  private static RETRYABLE_STATUS_CODES = new Set([
+    408, // Request Timeout
+    429, // Too Many Requests
+    500, // Internal Server Error
+    502, // Bad Gateway
+    503, // Service Unavailable
+    504, // Gateway Timeout
+  ]);
+
+  /**
+   * Check if an error is a retryable network error
+   */
+  private static isRetryableNetworkError(error: Error): boolean {
+    const message = error.message.toLowerCase();
+    return (
+      message.includes("econnreset") ||
+      message.includes("etimedout") ||
+      message.includes("econnrefused") ||
+      message.includes("enotfound") ||
+      message.includes("unable to connect") ||
+      message.includes("network") ||
+      message.includes("socket hang up") ||
+      message.includes("epipe")
+    );
+  }
+
+  /**
+   * Fetch with exponential backoff retry for transient failures.
+   * Automatically retries on network errors and retryable HTTP status codes.
+   *
+   * @param url - The URL to fetch
+   * @param options - Fetch options (method, headers, body, etc.)
+   * @param retryOptions - Retry configuration
+   * @returns The fetch Response object
+   */
+  static async fetchWithRetry(
+    url: string,
+    options?: RequestInit,
+    retryOptions?: {
+      maxRetries?: number;
+      baseDelay?: number;
+      maxDelay?: number;
+      jitter?: boolean;
+    }
+  ): Promise<Response> {
+    const maxRetries = retryOptions?.maxRetries ?? 3;
+    const baseDelay = retryOptions?.baseDelay ?? 1000;
+    const maxDelay = retryOptions?.maxDelay ?? 30000;
+    const jitter = retryOptions?.jitter ?? true;
+
+    let lastError: Error | null = null;
+
+    for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+      try {
+        const response = await fetch(url, options);
+
+        // Check if response status is retryable
+        if (Utils.RETRYABLE_STATUS_CODES.has(response.status)) {
+          if (attempt > maxRetries) {
+            // Return the response anyway on final attempt - let caller handle it
+            return response;
+          }
+
+          // Check for Retry-After header (common with 429 and 503)
+          const retryAfter = response.headers.get("Retry-After");
+          let delay: number;
+
+          if (retryAfter) {
+            // Retry-After can be seconds or an HTTP date
+            const seconds = Number.parseInt(retryAfter, 10);
+            if (!Number.isNaN(seconds)) {
+              delay = seconds * 1000;
+            } else {
+              const date = new Date(retryAfter);
+              delay = Math.max(0, date.getTime() - Date.now());
+            }
+          } else {
+            // Calculate exponential backoff with optional jitter
+            delay = Math.min(baseDelay * 2 ** (attempt - 1), maxDelay);
+            if (jitter) {
+              // Add random jitter (0-50% of delay) to avoid thundering herd
+              delay = delay + Math.random() * delay * 0.5;
+            }
+          }
+
+          console.warn(
+            `⚠️  HTTP ${response.status} from ${url}, retrying in ${Math.round(delay)}ms (attempt ${attempt}/${maxRetries + 1})...`
+          );
+          await Utils.sleep(delay);
+          continue;
+        }
+
+        // Success or non-retryable error - return response
+        return response;
+      } catch (error) {
+        lastError = error as Error;
+
+        // Check if it's a retryable network error
+        if (!Utils.isRetryableNetworkError(lastError)) {
+          throw lastError;
+        }
+
+        if (attempt > maxRetries) {
+          throw lastError;
+        }
+
+        // Calculate exponential backoff with jitter
+        let delay = Math.min(baseDelay * 2 ** (attempt - 1), maxDelay);
+        if (jitter) {
+          delay = delay + Math.random() * delay * 0.5;
+        }
+
+        console.warn(
+          `⚠️  Network error (${lastError.message}), retrying in ${Math.round(delay)}ms (attempt ${attempt}/${maxRetries + 1})...`
+        );
+        await Utils.sleep(delay);
+      }
+    }
+
+    throw lastError || new Error("Unexpected retry loop exit");
+  }
+
+  /**
    * Parse JIRA task key to extract project and number
    */
   static parseTaskKey(taskKey: string): {

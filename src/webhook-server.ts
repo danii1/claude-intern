@@ -732,7 +732,7 @@ async function postReviewReply(
       return;
     }
 
-    const response = await fetch(
+    const response = await Utils.fetchWithRetry(
       `https://api.github.com/repos/${owner}/${repo}/issues/${prNumber}/comments`,
       {
         method: "POST",

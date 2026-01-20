@@ -12,6 +12,7 @@ import {
 } from "../types/jira";
 import { JiraFormatter } from "./jira-formatter";
 import { JiraExtractor } from "./jira-extractor";
+import { Utils } from "./utils";
 import { assert } from "console";
 import { writeFileSync, mkdirSync } from "fs";
 import path from "path";
@@ -42,7 +43,7 @@ export class JiraClient {
         .substring(0, 10)}...`
     );
 
-    const response = await fetch(fullUrl, {
+    const response = await Utils.fetchWithRetry(fullUrl, {
       method: method,
       body: body ? Buffer.from(JSON.stringify(body), "utf-8") : undefined,
       headers: {
@@ -284,7 +285,7 @@ export class JiraClient {
       const localPath = path.join(outputDir, sanitizedFilename);
 
       // Download the attachment content
-      const response = await fetch(attachment.content, {
+      const response = await Utils.fetchWithRetry(attachment.content, {
         headers: {
           Authorization: this.getAuthHeader(),
         },
@@ -397,7 +398,7 @@ export class JiraClient {
 
         // Fetch attachment metadata first to get filename
         const metadataUrl = url.replace("/content/", "/");
-        const metadataResponse = await fetch(metadataUrl, {
+        const metadataResponse = await Utils.fetchWithRetry(metadataUrl, {
           headers: { Authorization: this.getAuthHeader() },
         });
 
