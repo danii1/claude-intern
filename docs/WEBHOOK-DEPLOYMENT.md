@@ -342,6 +342,8 @@ export GITHUB_APP_PRIVATE_KEY_BASE64="..."
 export WEBHOOK_PORT="3000"        # Default: 3000
 export WEBHOOK_HOST="0.0.0.0"     # Default: 0.0.0.0
 export WEBHOOK_AUTO_REPLY="true"  # Reply to addressed comments
+export WEBHOOK_AUTO_REVIEW="true" # Run self-review loop after addressing feedback
+export WEBHOOK_AUTO_REVIEW_MAX_ITERATIONS="5"  # Max review iterations (default: 5)
 ```
 
 ### Start the Server
@@ -373,6 +375,8 @@ WorkingDirectory=/path/to/your/projects
 Environment=WEBHOOK_SECRET=your-secret
 Environment=GITHUB_APP_ID=123456
 Environment=GITHUB_APP_PRIVATE_KEY_PATH=/path/to/key.pem
+Environment=WEBHOOK_AUTO_REPLY=true
+Environment=WEBHOOK_AUTO_REVIEW=true
 ExecStart=/usr/local/bin/claude-intern serve --port 3000
 Restart=always
 RestartSec=10

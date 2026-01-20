@@ -184,6 +184,8 @@ export interface WebhookServerConfig {
   host: string;
   webhookSecret: string;
   autoReply: boolean;
+  autoReview: boolean;
+  autoReviewMaxIterations: number;
   validateIp: boolean;
   debug: boolean;
 }

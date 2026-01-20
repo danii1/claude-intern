@@ -22,6 +22,7 @@ import {
 } from "./lib/review-formatter";
 import { Utils } from "./lib/utils";
 import { runClaudeToFixGitHook } from "./lib/git-hook-fixer";
+import { runAutoReviewLoop } from "./lib/auto-review-loop";
 import {
   handlePingEvent,
   isGitHubIP,
@@ -46,6 +47,8 @@ const DEFAULT_CONFIG: WebhookServerConfig = {
   host: process.env.WEBHOOK_HOST || "0.0.0.0",
   webhookSecret: process.env.WEBHOOK_SECRET || "",
   autoReply: process.env.WEBHOOK_AUTO_REPLY === "true",
+  autoReview: process.env.WEBHOOK_AUTO_REVIEW === "true",
+  autoReviewMaxIterations: parseInt(process.env.WEBHOOK_AUTO_REVIEW_MAX_ITERATIONS || "5", 10),
   validateIp: process.env.WEBHOOK_VALIDATE_IP === "true",
   debug: process.env.WEBHOOK_DEBUG === "true",
 };
@@ -580,6 +583,33 @@ async function processReviewAsync(
       }
     }
 
+    // Run auto-review loop if enabled
+    if (config.autoReview) {
+      console.log("\n🔄 Running auto-review loop...");
+      const autoReviewOutputDir = `/tmp/claude-intern-auto-review-${prNumber}`;
+      try {
+        const autoReviewResult = await runAutoReviewLoop({
+          repository: `${owner}/${repo}`,
+          prNumber,
+          prBranch: branch,
+          claudePath: process.env.CLAUDE_CLI_PATH || "claude",
+          maxIterations: config.autoReviewMaxIterations,
+          minPriority: "medium",
+          workingDir: worktreePath,
+          outputDir: autoReviewOutputDir,
+        });
+
+        if (autoReviewResult.success) {
+          console.log(`✅ Auto-review completed successfully after ${autoReviewResult.iterations} iteration(s)`);
+        } else {
+          console.warn(`⚠️  Auto-review completed but some issues remain after ${autoReviewResult.iterations} iteration(s)`);
+        }
+      } catch (error) {
+        console.error(`❌ Auto-review loop failed: ${(error as Error).message}`);
+        // Continue with marking comments as addressed even if auto-review fails
+      }
+    }
+
     // Mark comments as addressed with hooray reaction
     await markCommentsAsAddressed(githubClient, owner, repo, processedComments, config.debug);
 
@@ -822,6 +852,7 @@ export async function startWebhookServer(
   console.log(`   Port: ${finalConfig.port}`);
   console.log(`   Host: ${finalConfig.host}`);
   console.log(`   Auto-reply: ${finalConfig.autoReply}`);
+  console.log(`   Auto-review: ${finalConfig.autoReview}${finalConfig.autoReview ? ` (max ${finalConfig.autoReviewMaxIterations} iterations)` : ""}`);
   console.log(`   IP validation: ${finalConfig.validateIp}`);
   console.log(`   Debug mode: ${finalConfig.debug}`);
 
