@@ -76,6 +76,52 @@ function debugLog(config: WebhookServerConfig, message: string): void {
 }
 
 /**
+ * Trigger phrases that indicate the reviewer wants an auto-review loop
+ * instead of addressing specific comments.
+ */
+const AUTO_REVIEW_TRIGGER_PHRASES = [
+  "enhance",
+  "improve",
+  "improve pr",
+  "improve this",
+  "improve this pr",
+  "make it better",
+  "polish",
+  "refine",
+  "clean up",
+  "cleanup",
+  "self-review",
+  "self review",
+  "auto-review",
+  "auto review",
+  "review yourself",
+  "review it",
+];
+
+/**
+ * Check if a review body contains an auto-review trigger phrase.
+ * Returns true if the review body (after removing bot mention) matches a trigger phrase.
+ */
+function isAutoReviewTrigger(reviewBody: string | null, botName?: string): boolean {
+  if (!reviewBody) return false;
+
+  // Remove bot mention if present (e.g., "@claude-intern[bot]")
+  let normalizedBody = reviewBody.toLowerCase().trim();
+  if (botName) {
+    // Remove various forms of bot mention
+    normalizedBody = normalizedBody
+      .replace(new RegExp(`@${botName.toLowerCase()}\\[bot\\]`, "g"), "")
+      .replace(new RegExp(`@${botName.toLowerCase()}`, "g"), "")
+      .trim();
+  }
+
+  // Check if the remaining text matches a trigger phrase
+  return AUTO_REVIEW_TRIGGER_PHRASES.some(
+    (phrase) => normalizedBody === phrase || normalizedBody === phrase + "."
+  );
+}
+
+/**
  * Create JSON response helper.
  */
 function jsonResponse(
@@ -424,6 +470,50 @@ async function processReviewAsync(
       await Utils.executeGitCommand(["config", "user.name", gitAuthor.name], { verbose: config.debug, cwd: worktreePath });
       await Utils.executeGitCommand(["config", "user.email", gitAuthor.email], { verbose: config.debug, cwd: worktreePath });
       console.log(`🤖 Git author set to: ${gitAuthor.name}`);
+    }
+
+    // Check if this is an auto-review trigger (e.g., "@bot enhance", "@bot improve")
+    const botName = await githubClient.getBotUsername(owner, repo);
+    const reviewBody = event.review.body;
+    const isAutoReviewRequest = isAutoReviewTrigger(reviewBody, botName || undefined);
+
+    if (isAutoReviewRequest && config.autoReview) {
+      console.log(`\n🔄 Auto-review trigger detected: "${reviewBody?.trim()}"`);
+      console.log("   Skipping normal review flow, running auto-review loop directly...");
+
+      const autoReviewOutputDir = `/tmp/claude-intern-auto-review-${prNumber}`;
+      try {
+        const autoReviewResult = await runAutoReviewLoop({
+          repository: `${owner}/${repo}`,
+          prNumber,
+          prBranch: branch,
+          claudePath: process.env.CLAUDE_CLI_PATH || "claude",
+          maxIterations: config.autoReviewMaxIterations,
+          minPriority: "medium",
+          workingDir: worktreePath,
+          outputDir: autoReviewOutputDir,
+        });
+
+        if (autoReviewResult.success) {
+          console.log(`✅ Auto-review completed successfully after ${autoReviewResult.iterations} iteration(s)`);
+        } else {
+          console.warn(`⚠️  Auto-review completed but some issues remain after ${autoReviewResult.iterations} iteration(s)`);
+        }
+
+        // Post reply if auto-reply is enabled
+        if (config.autoReply) {
+          console.log("💬 Posting auto-review summary reply...");
+          const summary = `🤖 Auto-review completed after ${autoReviewResult.iterations} iteration(s). ${autoReviewResult.success ? "All medium+ priority issues addressed." : "Some issues may remain."}`;
+          await postAutoReviewReply(githubClient, owner, repo, prNumber, summary);
+        }
+
+        console.log(`\n✅ Successfully completed auto-review for PR #${prNumber}`);
+        return;
+      } catch (error) {
+        console.error(`❌ Auto-review loop failed: ${(error as Error).message}`);
+        // Don't fall through to normal flow - just return
+        return;
+      }
     }
 
     // Format prompt for Claude
@@ -783,6 +873,24 @@ async function postReviewReply(
     }
   } catch (error) {
     console.warn(`⚠️  Failed to post review reply: ${(error as Error).message}`);
+  }
+}
+
+/**
+ * Post a simple auto-review reply to a PR.
+ */
+async function postAutoReviewReply(
+  client: GitHubReviewsClient,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  message: string
+): Promise<void> {
+  try {
+    await client.postPullRequestComment(owner, repo, prNumber, message);
+    console.log("✅ Posted auto-review reply");
+  } catch (error) {
+    console.warn(`⚠️  Failed to post auto-review reply: ${(error as Error).message}`);
   }
 }
 
