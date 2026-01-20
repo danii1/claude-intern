@@ -137,7 +137,7 @@ ${itemsList}
  * Get PR diff using git diff against the base branch.
  * This avoids needing GH_TOKEN for gh CLI.
  */
-function getPRDiff(repository: string, prNumber: number, workingDir: string): string {
+function getPRDiff(baseBranch: string, workingDir: string): string {
   try {
     // Fetch latest from origin to ensure we have up-to-date refs
     try {
@@ -150,21 +150,11 @@ function getPRDiff(repository: string, prNumber: number, workingDir: string): st
       // Ignore fetch errors - we may be offline or origin may not exist
     }
 
-    // Try to determine the base branch (main or master)
-    let baseBranch = 'origin/main';
-    try {
-      execSync('git rev-parse --verify origin/main', {
-        cwd: workingDir,
-        encoding: 'utf-8',
-        stdio: 'pipe',
-      });
-    } catch {
-      // main doesn't exist, try master
-      baseBranch = 'origin/master';
-    }
+    // Use the provided base branch (prefixed with origin/ if not already)
+    const remoteBase = baseBranch.startsWith('origin/') ? baseBranch : `origin/${baseBranch}`;
 
     // Get the merge base to find where the PR branch diverged
-    const mergeBase = execSync(`git merge-base HEAD ${baseBranch}`, {
+    const mergeBase = execSync(`git merge-base HEAD ${remoteBase}`, {
       cwd: workingDir,
       encoding: 'utf-8',
       stdio: 'pipe',
@@ -334,6 +324,7 @@ export async function runAutoReviewLoop(options: AutoReviewLoopOptions): Promise
     repository,
     prNumber,
     prBranch,
+    baseBranch,
     claudePath,
     maxIterations = 5,
     minPriority = 'medium',
@@ -342,6 +333,7 @@ export async function runAutoReviewLoop(options: AutoReviewLoopOptions): Promise
   } = options;
 
   console.log(`\n🔄 Starting automatic PR review loop for #${prNumber}`);
+  console.log(`   Base branch: ${baseBranch}`);
   console.log(`   Max iterations: ${maxIterations}`);
   console.log(`   Addressing: ${minPriority}+ priority issues\n`);
 
@@ -357,7 +349,7 @@ export async function runAutoReviewLoop(options: AutoReviewLoopOptions): Promise
     } else {
       console.log(`📥 Fetching updated PR diff (after iteration ${iteration - 1} fixes)...`);
     }
-    const prDiff = getPRDiff(repository, prNumber, workingDir);
+    const prDiff = getPRDiff(baseBranch, workingDir);
 
     // Step 2: Generate review prompt and request feedback
     if (iteration === 1) {

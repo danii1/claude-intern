@@ -482,11 +482,13 @@ async function processReviewAsync(
       console.log("   Skipping normal review flow, running auto-review loop directly...");
 
       const autoReviewOutputDir = `/tmp/claude-intern-auto-review-${prNumber}`;
+      const baseBranch = event.pull_request.base.ref;
       try {
         const autoReviewResult = await runAutoReviewLoop({
           repository: `${owner}/${repo}`,
           prNumber,
           prBranch: branch,
+          baseBranch,
           claudePath: process.env.CLAUDE_CLI_PATH || "claude",
           maxIterations: config.autoReviewMaxIterations,
           minPriority: "medium",
@@ -677,11 +679,13 @@ async function processReviewAsync(
     if (config.autoReview) {
       console.log("\n🔄 Running auto-review loop...");
       const autoReviewOutputDir = `/tmp/claude-intern-auto-review-${prNumber}`;
+      const baseBranchForReview = event.pull_request.base.ref;
       try {
         const autoReviewResult = await runAutoReviewLoop({
           repository: `${owner}/${repo}`,
           prNumber,
           prBranch: branch,
+          baseBranch: baseBranchForReview,
           claudePath: process.env.CLAUDE_CLI_PATH || "claude",
           maxIterations: config.autoReviewMaxIterations,
           minPriority: "medium",

@@ -51,8 +51,11 @@ export interface AutoReviewLoopOptions {
   /** PR number */
   prNumber: number;
 
-  /** PR branch name */
+  /** PR branch name (head branch) */
   prBranch: string;
+
+  /** PR base/target branch (e.g., "main", "develop") */
+  baseBranch: string;
 
   /** Path to Claude CLI executable */
   claudePath: string;

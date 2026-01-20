@@ -2360,6 +2360,7 @@ async function runClaude(
                                 repository,
                                 prNumber,
                                 prBranch: currentBranch,
+                                baseBranch: prTargetBranch,
                                 claudePath,
                                 maxIterations: autoReviewIterations,
                                 minPriority: 'medium',
