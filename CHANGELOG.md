@@ -1,5 +1,38 @@
 # Claude Intern Changelog
 
+## [2.1.0] - 2026-01-23
+
+### Added
+
+- **Automatic PR Self-Review Loop**: New `--auto-review` flag enables iterative self-improvement of PRs
+  - Claude reviews its own PR diff and identifies issues by priority (critical/high/medium/low/info)
+  - Automatically addresses medium+ priority issues in iterative cycles
+  - Configurable max iterations (default: 5) via `--auto-review-max-iterations`
+  - Saves review artifacts (feedback.json, prompts) to output directory for debugging
+  - Integrated into webhook server via `WEBHOOK_AUTO_REVIEW=true`
+
+- **Auto-Review Trigger Phrases**: Webhook server responds to simple trigger phrases in reviews
+  - Supported phrases: "enhance", "improve", "polish", "refine", "clean up", "self-review", etc.
+  - Example: Post a review with just `@claude-intern enhance` to trigger auto-review loop
+  - Skips normal review flow and runs self-review directly
+
+- **Exponential Backoff with Jitter**: All HTTP API calls now have robust retry logic
+  - Automatic retries on 5xx errors and network failures
+  - Exponential backoff (1s → 2s → 4s → 8s) with random jitter to prevent thundering herd
+  - Configurable max retries (default: 3)
+
+- **Detailed Issue Logging**: Auto-review loop now logs each issue with priority and location
+  - Format: `[priority] (file:line): issue description`
+  - Makes it easy to see what issues will be addressed in each iteration
+
+### Changed
+
+- **Webhook Auto-Review Flow**: Restructured to validate hooks and batch changes before pushing
+  - Runs pre-push hook validation locally before any push
+  - Auto-review runs with `skipPush: true` to accumulate all improvements
+  - Re-validates hooks after auto-review changes
+  - Single push at the end with all review fixes and auto-review improvements
+
 ## [2.0.0] - 2025-12-24
 
 ### Breaking Changes
