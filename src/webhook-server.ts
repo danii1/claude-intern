@@ -105,13 +105,16 @@ const AUTO_REVIEW_TRIGGER_PHRASES = [
 function isAutoReviewTrigger(reviewBody: string | null, botName?: string): boolean {
   if (!reviewBody) return false;
 
-  // Remove bot mention if present (e.g., "@claude-intern[bot]")
+  // Remove bot mention if present (e.g., "@claude-intern[bot]" or "@claude-intern")
   let normalizedBody = reviewBody.toLowerCase().trim();
   if (botName) {
-    // Remove various forms of bot mention
+    // Strip [bot] suffix from botName if present to get the base name
+    const baseBotName = botName.toLowerCase().replace(/\[bot\]$/, "");
+
+    // Remove various forms of bot mention (with and without [bot] suffix)
     normalizedBody = normalizedBody
-      .replace(new RegExp(`@${botName.toLowerCase()}\\[bot\\]`, "g"), "")
-      .replace(new RegExp(`@${botName.toLowerCase()}`, "g"), "")
+      .replace(new RegExp(`@${baseBotName}\\[bot\\]`, "g"), "")
+      .replace(new RegExp(`@${baseBotName}`, "g"), "")
       .trim();
   }
 
@@ -629,8 +632,106 @@ async function processReviewAsync(
       console.warn("⚠️  No new commits to push - Claude may not have made any changes");
       // Still continue to mark comments as addressed
     } else {
-      // Push changes with hook retry logic
-      console.log(`\n📤 Pushing ${finalCommitsAhead} commit(s)...`);
+      // Helper function for local hook validation with retry
+      const validateLocalHook = async (phase: string): Promise<boolean> => {
+        let attempt = 0;
+
+        while (attempt <= hookRetries) {
+          attempt++;
+          const hookResult = await Utils.runPrePushHookLocally({
+            verbose: config.debug,
+            cwd: worktreePath,
+          });
+
+          if (hookResult.success) {
+            if (attempt === 1) {
+              console.log(`✅ ${hookResult.message}`);
+            } else {
+              console.log(`✅ Pre-push hook passed after ${attempt} attempt(s)`);
+            }
+            return true;
+          }
+
+          // Check if this is a hook error that we can try to fix
+          if (hookResult.hookError && attempt <= hookRetries) {
+            console.log(`\n⚠️  Pre-push hook failed during ${phase} (attempt ${attempt}/${hookRetries + 1})`);
+
+            // Try to fix the hook error with Claude
+            const fixed = await runClaudeToFixGitHook("push", claudePath, maxTurns, worktreePath);
+
+            if (fixed) {
+              console.log("\n🔄 Retrying local hook validation after Claude fixed the issues...");
+              continue;
+            } else {
+              console.log("\n❌ Could not fix pre-push hook errors automatically");
+              return false;
+            }
+          } else {
+            // Not a hook error or out of retries
+            if (attempt > hookRetries) {
+              console.log(`\n❌ Max retries (${hookRetries}) exceeded for pre-push hook fixes`);
+            }
+            console.error(`\n❌ Pre-push hook validation failed: ${hookResult.message}`);
+            return false;
+          }
+        }
+
+        return false;
+      };
+
+      // Step 1: Validate pre-push hook locally BEFORE any push
+      console.log("\n🔍 Validating pre-push hook locally (before pushing)...");
+      const initialHookValid = await validateLocalHook("initial validation");
+
+      if (!initialHookValid) {
+        console.error("❌ Cannot proceed without passing pre-push hook validation");
+        return;
+      }
+
+      // Step 2: Run auto-review loop with skipPush if enabled
+      // This allows all improvements to be made locally before pushing
+      let autoReviewRan = false;
+      if (config.autoReview) {
+        console.log("\n🔄 Running auto-review loop (without pushing)...");
+        const autoReviewOutputDir = `/tmp/claude-intern-auto-review-${prNumber}`;
+        const baseBranchForReview = event.pull_request.base.ref;
+        try {
+          const autoReviewResult = await runAutoReviewLoop({
+            repository: `${owner}/${repo}`,
+            prNumber,
+            prBranch: branch,
+            baseBranch: baseBranchForReview,
+            claudePath: process.env.CLAUDE_CLI_PATH || "claude",
+            maxIterations: config.autoReviewMaxIterations,
+            minPriority: "medium",
+            workingDir: worktreePath,
+            outputDir: autoReviewOutputDir,
+            skipPush: true, // Don't push during auto-review iterations
+          });
+
+          if (autoReviewResult.success) {
+            console.log(`✅ Auto-review completed successfully after ${autoReviewResult.iterations} iteration(s)`);
+          } else {
+            console.warn(`⚠️  Auto-review completed but some issues remain after ${autoReviewResult.iterations} iteration(s)`);
+          }
+          autoReviewRan = true;
+
+          // Step 3: Re-validate local hook after auto-review (auto-review changes may have broken things)
+          console.log("\n🔍 Re-validating pre-push hook after auto-review improvements...");
+          const postAutoReviewHookValid = await validateLocalHook("post auto-review validation");
+
+          if (!postAutoReviewHookValid) {
+            console.error("❌ Cannot proceed - auto-review changes failed pre-push hook validation");
+            return;
+          }
+        } catch (error) {
+          console.error(`❌ Auto-review loop failed: ${(error as Error).message}`);
+          // Continue with push even if auto-review fails
+        }
+      }
+
+      // Step 4: Now do the actual push (hooks already validated, should succeed)
+      console.log(`\n📤 Pushing ${finalCommitsAhead}${autoReviewRan ? "+ auto-review" : ""} commit(s)...`);
 
       let pushAttempt = 0;
       let pushSuccess = false;
@@ -647,7 +748,7 @@ async function processReviewAsync(
 
         // Check if this is a git hook error that we can try to fix
         if (pushResult.hookError && pushAttempt <= hookRetries) {
-          console.log(`\n⚠️  Git pre-push hook failed (attempt ${pushAttempt}/${hookRetries + 1})`);
+          console.log(`\n⚠️  Git pre-push hook failed during actual push (attempt ${pushAttempt}/${hookRetries + 1})`);
 
           // Try to fix the hook error with Claude
           const fixed = await runClaudeToFixGitHook("push", claudePath, maxTurns, worktreePath);
@@ -672,35 +773,6 @@ async function processReviewAsync(
       if (!pushSuccess) {
         console.error("❌ Failed to push changes after retries");
         return;
-      }
-    }
-
-    // Run auto-review loop if enabled
-    if (config.autoReview) {
-      console.log("\n🔄 Running auto-review loop...");
-      const autoReviewOutputDir = `/tmp/claude-intern-auto-review-${prNumber}`;
-      const baseBranchForReview = event.pull_request.base.ref;
-      try {
-        const autoReviewResult = await runAutoReviewLoop({
-          repository: `${owner}/${repo}`,
-          prNumber,
-          prBranch: branch,
-          baseBranch: baseBranchForReview,
-          claudePath: process.env.CLAUDE_CLI_PATH || "claude",
-          maxIterations: config.autoReviewMaxIterations,
-          minPriority: "medium",
-          workingDir: worktreePath,
-          outputDir: autoReviewOutputDir,
-        });
-
-        if (autoReviewResult.success) {
-          console.log(`✅ Auto-review completed successfully after ${autoReviewResult.iterations} iteration(s)`);
-        } else {
-          console.warn(`⚠️  Auto-review completed but some issues remain after ${autoReviewResult.iterations} iteration(s)`);
-        }
-      } catch (error) {
-        console.error(`❌ Auto-review loop failed: ${(error as Error).message}`);
-        // Continue with marking comments as addressed even if auto-review fails
       }
     }
 

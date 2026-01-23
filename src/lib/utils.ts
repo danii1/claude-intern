@@ -734,6 +734,228 @@ export class Utils {
   }
 
   /**
+   * Run the pre-push git hook locally without actually pushing.
+   * This allows validating code before pushing to minimize CI impact.
+   *
+   * The pre-push hook receives:
+   * - $1 = remote name (e.g., "origin")
+   * - $2 = remote URL
+   * - stdin = "<local-ref> <local-sha> <remote-ref> <remote-sha>\n"
+   *
+   * @returns Object with success status and hookError if hook failed
+   */
+  static async runPrePushHookLocally(options?: {
+    verbose?: boolean;
+    cwd?: string;
+  }): Promise<{
+    success: boolean;
+    message: string;
+    hookError?: string;
+  }> {
+    const verbose = options?.verbose ?? false;
+    const cwd = options?.cwd ?? process.cwd();
+
+    try {
+      // Get current branch
+      const currentBranch = await Utils.getCurrentBranch(cwd);
+      if (!currentBranch) {
+        return {
+          success: false,
+          message: "Could not determine current branch",
+        };
+      }
+
+      // Find the hook path (respects core.hooksPath configuration)
+      const hooksPathResult = await Utils.executeGitCommand(
+        ["config", "--get", "core.hooksPath"],
+        { verbose: false, cwd }
+      );
+
+      let hookDir: string;
+      if (hooksPathResult.success && hooksPathResult.output?.trim()) {
+        hookDir = hooksPathResult.output.trim();
+        // If it's a relative path, resolve it from the repo root
+        if (!hookDir.startsWith("/")) {
+          const repoRootResult = await Utils.executeGitCommand(
+            ["rev-parse", "--show-toplevel"],
+            { verbose: false, cwd }
+          );
+          if (repoRootResult.success && repoRootResult.output?.trim()) {
+            const { join } = require("path");
+            hookDir = join(repoRootResult.output.trim(), hookDir);
+          }
+        }
+      } else {
+        // Default to .git/hooks
+        // Use --git-common-dir to find hooks in worktrees (hooks are shared)
+        const gitDirResult = await Utils.executeGitCommand(
+          ["rev-parse", "--git-common-dir"],
+          { verbose: false, cwd }
+        );
+        if (!gitDirResult.success || !gitDirResult.output?.trim()) {
+          return {
+            success: false,
+            message: "Could not determine .git directory",
+          };
+        }
+        const { join } = require("path");
+        const gitDir = gitDirResult.output.trim();
+        // Handle both absolute and relative git dir paths
+        hookDir = gitDir.startsWith("/")
+          ? join(gitDir, "hooks")
+          : join(cwd, gitDir, "hooks");
+      }
+
+      const { join } = require("path");
+      const hookPath = join(hookDir, "pre-push");
+
+      // Check if hook exists
+      const { existsSync, statSync } = require("fs");
+      if (!existsSync(hookPath)) {
+        if (verbose) {
+          console.log("   No pre-push hook found, skipping local validation");
+        }
+        return {
+          success: true,
+          message: "No pre-push hook found (nothing to validate)",
+        };
+      }
+
+      // Check if hook is executable (on Unix systems)
+      try {
+        const stats = statSync(hookPath);
+        const isExecutable = (stats.mode & 0o111) !== 0;
+        if (!isExecutable) {
+          if (verbose) {
+            console.log("   Pre-push hook exists but is not executable, skipping");
+          }
+          return {
+            success: true,
+            message: "Pre-push hook is not executable (skipping)",
+          };
+        }
+      } catch {
+        // On Windows or if stat fails, try running anyway
+      }
+
+      // Get remote URL
+      const remoteUrlResult = await Utils.executeGitCommand(
+        ["remote", "get-url", "origin"],
+        { verbose: false, cwd }
+      );
+      if (!remoteUrlResult.success || !remoteUrlResult.output?.trim()) {
+        return {
+          success: false,
+          message: "Could not get remote URL for origin",
+        };
+      }
+      const remoteUrl = remoteUrlResult.output.trim();
+
+      // Get local SHA (HEAD)
+      const localShaResult = await Utils.executeGitCommand(
+        ["rev-parse", "HEAD"],
+        { verbose: false, cwd }
+      );
+      if (!localShaResult.success || !localShaResult.output?.trim()) {
+        return {
+          success: false,
+          message: "Could not get local HEAD SHA",
+        };
+      }
+      const localSha = localShaResult.output.trim();
+
+      // Get remote SHA (origin/branch) - may be all zeros if branch doesn't exist remotely
+      const remoteShaResult = await Utils.executeGitCommand(
+        ["rev-parse", `origin/${currentBranch}`],
+        { verbose: false, cwd }
+      );
+      const remoteSha = remoteShaResult.success && remoteShaResult.output?.trim()
+        ? remoteShaResult.output.trim()
+        : "0000000000000000000000000000000000000000";
+
+      // Construct the stdin content for the pre-push hook
+      const stdinContent = `refs/heads/${currentBranch} ${localSha} refs/heads/${currentBranch} ${remoteSha}\n`;
+
+      if (verbose) {
+        console.log(`   Running pre-push hook: ${hookPath}`);
+        console.log(`   Remote: origin (${remoteUrl})`);
+        console.log(`   Branch: ${currentBranch}`);
+        console.log(`   Local SHA: ${localSha.substring(0, 8)}`);
+        console.log(`   Remote SHA: ${remoteSha.substring(0, 8)}`);
+      }
+
+      // Run the pre-push hook
+      const { spawn } = require("child_process");
+
+      return new Promise((resolve) => {
+        const hookProcess = spawn(hookPath, ["origin", remoteUrl], {
+          cwd,
+          stdio: ["pipe", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            // Git sets these environment variables when running hooks
+            GIT_DIR: undefined, // Let git determine this
+          },
+        });
+
+        let stdout = "";
+        let stderr = "";
+
+        hookProcess.stdout.on("data", (data: Buffer) => {
+          const output = data.toString();
+          stdout += output;
+          if (verbose) {
+            process.stdout.write(output);
+          }
+        });
+
+        hookProcess.stderr.on("data", (data: Buffer) => {
+          const output = data.toString();
+          stderr += output;
+          if (verbose) {
+            process.stderr.write(output);
+          }
+        });
+
+        hookProcess.on("error", (error: Error) => {
+          resolve({
+            success: false,
+            message: `Failed to run pre-push hook: ${error.message}`,
+            hookError: error.message,
+          });
+        });
+
+        hookProcess.on("close", (code: number | null) => {
+          const fullOutput = [stdout, stderr].filter(Boolean).join("\n").trim();
+
+          if (code === 0) {
+            resolve({
+              success: true,
+              message: "Pre-push hook passed",
+            });
+          } else {
+            resolve({
+              success: false,
+              message: `Pre-push hook failed with exit code ${code}`,
+              hookError: fullOutput || `Hook exited with code ${code}`,
+            });
+          }
+        });
+
+        // Send the stdin content to the hook
+        hookProcess.stdin.write(stdinContent);
+        hookProcess.stdin.end();
+      });
+    } catch (error) {
+      return {
+        success: false,
+        message: `Failed to run pre-push hook: ${(error as Error).message}`,
+        hookError: (error as Error).message,
+      };
+    }
+  }
+
+  /**
    * Check if the current branch is a protected branch (main/master/develop)
    */
   static async isProtectedBranch(branch?: string): Promise<boolean> {

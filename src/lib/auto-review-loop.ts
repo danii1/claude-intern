@@ -138,8 +138,21 @@ ${itemsList}
  * This avoids needing GH_TOKEN for gh CLI.
  */
 function getPRDiff(baseBranch: string, workingDir: string): string {
+  // Strip origin/ prefix if present for fetch command
+  const branchName = baseBranch.replace(/^origin\//, '');
+  const remoteBase = `origin/${branchName}`;
+
+  // Explicitly fetch the base branch we need
+  console.log(`📥 Fetching ${remoteBase} from origin...`);
   try {
-    // Fetch latest from origin to ensure we have up-to-date refs
+    execSync(`git fetch origin ${branchName}:refs/remotes/origin/${branchName}`, {
+      cwd: workingDir,
+      encoding: 'utf-8',
+      stdio: 'pipe',
+    });
+  } catch (fetchError) {
+    // Try a broader fetch if specific branch fetch fails
+    console.log(`⚠️  Specific branch fetch failed, trying full fetch...`);
     try {
       execSync('git fetch origin', {
         cwd: workingDir,
@@ -147,20 +160,72 @@ function getPRDiff(baseBranch: string, workingDir: string): string {
         stdio: 'pipe',
       });
     } catch {
-      // Ignore fetch errors - we may be offline or origin may not exist
+      console.log(`⚠️  Full fetch also failed, continuing with existing refs...`);
     }
+  }
 
-    // Use the provided base branch (prefixed with origin/ if not already)
-    const remoteBase = baseBranch.startsWith('origin/') ? baseBranch : `origin/${baseBranch}`;
+  // Check if this is a shallow clone and unshallow if needed
+  try {
+    const isShallow = execSync('git rev-parse --is-shallow-repository', {
+      cwd: workingDir,
+      encoding: 'utf-8',
+      stdio: 'pipe',
+    }).trim();
 
-    // Get the merge base to find where the PR branch diverged
+    if (isShallow === 'true') {
+      console.log(`📥 Shallow repository detected, fetching full history...`);
+      try {
+        execSync('git fetch --unshallow origin', {
+          cwd: workingDir,
+          encoding: 'utf-8',
+          stdio: 'pipe',
+        });
+      } catch {
+        console.log(`⚠️  Failed to unshallow, trying to deepen history...`);
+        execSync('git fetch --deepen=1000 origin', {
+          cwd: workingDir,
+          encoding: 'utf-8',
+          stdio: 'pipe',
+        });
+      }
+    }
+  } catch {
+    // Ignore - might be an old git version
+  }
+
+  // Verify the remote branch exists
+  try {
+    execSync(`git rev-parse --verify ${remoteBase}`, {
+      cwd: workingDir,
+      encoding: 'utf-8',
+      stdio: 'pipe',
+    });
+  } catch {
+    throw new Error(`Remote branch ${remoteBase} not found. Make sure it exists on the remote.`);
+  }
+
+  // Try multiple approaches to get the diff
+  // Approach 1: Use three-dot syntax which handles merge-base internally
+  console.log(`🔍 Getting diff between ${remoteBase} and HEAD...`);
+  try {
+    const result = execSync(`git diff ${remoteBase}...HEAD`, {
+      cwd: workingDir,
+      encoding: 'utf-8',
+      maxBuffer: 10 * 1024 * 1024, // 10MB
+    });
+    return result;
+  } catch (error) {
+    console.log(`⚠️  Three-dot diff failed: ${error}`);
+  }
+
+  // Approach 2: Try explicit merge-base
+  try {
     const mergeBase = execSync(`git merge-base HEAD ${remoteBase}`, {
       cwd: workingDir,
       encoding: 'utf-8',
       stdio: 'pipe',
     }).trim();
 
-    // Get diff from merge base to HEAD
     const result = execSync(`git diff ${mergeBase}..HEAD`, {
       cwd: workingDir,
       encoding: 'utf-8',
@@ -168,7 +233,20 @@ function getPRDiff(baseBranch: string, workingDir: string): string {
     });
     return result;
   } catch (error) {
-    throw new Error(`Failed to get PR diff: ${error}`);
+    console.log(`⚠️  Merge-base diff failed: ${error}`);
+  }
+
+  // Approach 3: Fall back to two-dot diff (shows all changes, not just since divergence)
+  console.log(`⚠️  Falling back to two-dot diff (may include extra changes)...`);
+  try {
+    const result = execSync(`git diff ${remoteBase}..HEAD`, {
+      cwd: workingDir,
+      encoding: 'utf-8',
+      maxBuffer: 10 * 1024 * 1024, // 10MB
+    });
+    return result;
+  } catch (error) {
+    throw new Error(`Failed to get PR diff with all approaches: ${error}`);
   }
 }
 
@@ -330,12 +408,17 @@ export async function runAutoReviewLoop(options: AutoReviewLoopOptions): Promise
     minPriority = 'medium',
     workingDir,
     outputDir,
+    skipPush = false,
   } = options;
 
   console.log(`\n🔄 Starting automatic PR review loop for #${prNumber}`);
   console.log(`   Base branch: ${baseBranch}`);
   console.log(`   Max iterations: ${maxIterations}`);
-  console.log(`   Addressing: ${minPriority}+ priority issues\n`);
+  console.log(`   Addressing: ${minPriority}+ priority issues`);
+  if (skipPush) {
+    console.log(`   Push mode: deferred (will not push during iterations)`);
+  }
+  console.log('');
 
   const history: AutoReviewLoopResult['history'] = [];
   let currentFeedback: ReviewFeedback | null = null;
@@ -430,9 +513,13 @@ export async function runAutoReviewLoop(options: AutoReviewLoopOptions): Promise
       console.log(`⚠️  No changes committed: ${error}`);
     }
 
-    // Step 7: Push changes
-    console.log('📤 Pushing changes...');
-    pushChanges(prBranch, workingDir);
+    // Step 7: Push changes (unless skipPush is enabled)
+    if (!skipPush) {
+      console.log('📤 Pushing changes...');
+      pushChanges(prBranch, workingDir);
+    } else {
+      console.log('⏸️  Skipping push (deferred mode)');
+    }
 
     // Record history
     history.push({
@@ -448,7 +535,8 @@ export async function runAutoReviewLoop(options: AutoReviewLoopOptions): Promise
     }
 
     // Wait a moment for GitHub to process the push before next iteration
-    if (iteration < maxIterations) {
+    // (only needed if we're actually pushing)
+    if (!skipPush && iteration < maxIterations) {
       console.log('\n⏳ Waiting for GitHub to process changes...');
       await new Promise((resolve) => setTimeout(resolve, 2000));
     }

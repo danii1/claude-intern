@@ -71,6 +71,13 @@ export interface AutoReviewLoopOptions {
 
   /** Output directory for logs and artifacts */
   outputDir: string;
+
+  /**
+   * Skip pushing after each iteration.
+   * When true, changes are committed but not pushed during auto-review.
+   * Useful when running local hook validation before a single final push.
+   */
+  skipPush?: boolean;
 }
 
 export interface AutoReviewLoopResult {
