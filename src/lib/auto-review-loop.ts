@@ -464,6 +464,15 @@ export async function runAutoReviewLoop(options: AutoReviewLoopOptions): Promise
 
     console.log('   Breakdown:', priorityCounts);
 
+    // Log each issue with priority
+    if (currentFeedback.items.length > 0) {
+      console.log('   Issues:');
+      for (const item of currentFeedback.items) {
+        const location = item.file ? ` (${item.file}${item.line ? `:${item.line}` : ''})` : '';
+        console.log(`     [${item.priority}]${location}: ${item.issue}`);
+      }
+    }
+
     // Show comparison to previous iteration
     if (iteration > 1 && history.length > 0) {
       const previousFeedback = history[history.length - 1].feedback;
