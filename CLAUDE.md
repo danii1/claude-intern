@@ -25,13 +25,17 @@ Claude Intern - AI tool for automatically implementing JIRA tasks using Claude C
 - **[src/lib/github-reviews.ts](src/lib/github-reviews.ts)** - GitHub API client for PR reviews
 - **[src/lib/review-formatter.ts](src/lib/review-formatter.ts)** - Formats PR review feedback for Claude
 - **[src/lib/address-review.ts](src/lib/address-review.ts)** - Handles PR review responses
+- **[src/lib/auto-review-loop.ts](src/lib/auto-review-loop.ts)** - Automatic PR self-review and improvement loop
 - **[src/webhook-server.ts](src/webhook-server.ts)** - Webhook server for automated PR review handling
 - **[src/types/](src/types/)** - TypeScript interfaces
 
 ### Key Workflows
 
 **JIRA Task Processing:**
-1. Fetch JIRA details → 2. Transition to "In Progress" → 3. Create `feature/{task-key}` branch → 4. Run clarity check → 5. Execute Claude → 6. Commit changes → 7. Create PR (optional) → 8. Post summary to JIRA
+1. Fetch JIRA details → 2. Transition to "In Progress" → 3. Create `feature/{task-key}` branch → 4. Run clarity check → 5. Execute Claude → 6. Commit changes → 7. Create PR (optional) → 8. Auto-review loop (optional) → 9. Post summary to JIRA
+
+**Auto-Review Loop** (with `--auto-review` flag):
+1. Fetch PR diff → 2. Run Claude to review code (JSON feedback) → 3. Parse feedback by priority → 4. Address critical/high/medium issues → 5. Commit & push fixes → 6. Repeat up to N iterations (default: 5) or until approved
 
 **PR Review Handling:**
 1. Webhook receives review → 2. Check bot mention → 3. Queue review → 4. Switch worktree to PR branch → 5. Fetch comments → 6. Run Claude → 7. Commit fixes → 8. Push & reply
@@ -66,6 +70,10 @@ Claude Intern - AI tool for automatically implementing JIRA tasks using Claude C
 ├── feasibility-assessment.md            # Clarity check results
 ├── implementation-summary.md            # Success output
 ├── implementation-summary-incomplete.md # Failure output
+├── auto-review-summary.json             # Auto-review loop results
+├── iteration-{N}/                       # Auto-review iteration artifacts
+│   ├── feedback.json                    # Structured review feedback
+│   └── review-prompt.txt                # Prompt sent to Claude
 └── attachments/                         # JIRA attachments
 ```
 

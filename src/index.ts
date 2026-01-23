@@ -13,6 +13,7 @@ import { LockManager } from "./lib/lock-manager";
 import { PRManager } from "./lib/pr-client";
 import { Utils } from "./lib/utils";
 import { runClaudeToFixGitHook } from "./lib/git-hook-fixer";
+import { runAutoReviewLoop } from "./lib/auto-review-loop";
 import type { ProjectSettings } from "./types/settings";
 
 // Version is injected at build time via --define flag, or read from package.json in dev
@@ -34,6 +35,8 @@ interface ProgramOptions {
   skipClarityCheck: boolean; // New option to skip clarity check
   createPr: boolean; // New option to create pull request
   prTargetBranch: string; // Target branch for PR
+  autoReview: boolean; // New option to run automatic PR review loop
+  autoReviewIterations: string; // Max iterations for auto-review loop
   jql?: string; // JQL query for batch processing
   skipJiraComments: boolean; // New option to skip posting comments to JIRA
   hookRetries: string; // Number of retries for git hook failures
@@ -539,6 +542,15 @@ program
     "main"
   )
   .option(
+    "--auto-review",
+    "Run automatic PR review loop after creating PR (requires --create-pr)"
+  )
+  .option(
+    "--auto-review-iterations <number>",
+    "Maximum iterations for auto-review loop",
+    "5"
+  )
+  .option(
     "--skip-jira-comments",
     "Skip posting comments to JIRA (for testing)"
   )
@@ -1002,7 +1014,9 @@ async function processSingleTask(
         options.skipJiraComments,
         Number.parseInt(options.hookRetries),
         projectSettings,
-        gitAuthor
+        gitAuthor,
+        options.autoReview,
+        Number.parseInt(options.autoReviewIterations)
       );
     } else {
       console.log("\n✅ Task details saved. You can now:");
@@ -1825,6 +1839,83 @@ ${"=".repeat(80)}
 }
 
 
+/**
+ * Detects if Claude only created a plan instead of implementing the task.
+ * Returns the plan file path if detected, null otherwise.
+ */
+function detectPlanOnlyBehavior(claudeOutput: string): string | null {
+  // Check for common plan creation patterns
+  const planCreationPatterns = [
+    /I'?ve created (a|an|the) (comprehensive )?(implementation )?plan/i,
+    /created a plan for/i,
+    /plan has been created/i,
+    /implementation plan is (now )?ready/i,
+    /drafted a plan/i,
+    /wrote out a plan/i,
+  ];
+
+  const hasPlanCreationLanguage = planCreationPatterns.some(pattern =>
+    pattern.test(claudeOutput)
+  );
+
+  if (!hasPlanCreationLanguage) {
+    return null;
+  }
+
+  // Try to extract the plan file path
+  // Common patterns:
+  // - "available at `/path/to/plan.md`"
+  // - "available at /path/to/plan.md"
+  // - "saved to: /path/to/plan.md"
+  // - ~/.claude/plans/something.md
+  const pathPatterns = [
+    /(?:available at|saved to:?)\s*[`"]?((?:\/[^\s`"]+|~\/\.claude\/plans\/[^\s`"]+)\.md)[`"]?/i,
+    /[`"]((?:\/home\/[^\s`"]+|~)\/\.claude\/plans\/[^\s`"]+\.md)[`"]/,
+    /(\/home\/[^\s]+\/\.claude\/plans\/[^\s]+\.md)/,
+  ];
+
+  for (const pattern of pathPatterns) {
+    const match = claudeOutput.match(pattern);
+    if (match && match[1]) {
+      let planPath = match[1];
+      // Expand ~ to home directory
+      if (planPath.startsWith('~')) {
+        const homeDir = process.env.HOME || '/tmp';
+        planPath = planPath.replace('~', homeDir);
+      }
+      return planPath;
+    }
+  }
+
+  // If we detected plan creation language but couldn't extract the path,
+  // return a sentinel value to indicate plan-only behavior
+  return 'PLAN_DETECTED_NO_PATH';
+}
+
+/**
+ * Creates a prompt to instruct Claude to implement an existing plan
+ */
+function createPlanImplementationPrompt(planPath: string | null, originalTaskContent: string): string {
+  const planInstructions = planPath && planPath !== 'PLAN_DETECTED_NO_PATH'
+    ? `You previously created an implementation plan at: ${planPath}
+
+Please read this plan file and implement it NOW. Do not create another plan - actually write the code and make the changes described in the plan.`
+    : `You previously created an implementation plan but did not implement it.
+
+Please implement the task NOW. Do not just plan or describe what needs to be done - actually write the code and make the changes.`;
+
+  return `${planInstructions}
+
+IMPORTANT: You MUST actually implement the changes, not just plan them. Create/modify files as needed. Do not exit until actual code changes have been made.
+
+For reference, here is the original task:
+---
+${originalTaskContent}
+---
+
+Now implement the solution. Write the actual code.`;
+}
+
 // Function to run Claude with the formatted task
 async function runClaude(
   taskFile: string,
@@ -1840,7 +1931,10 @@ async function runClaude(
   skipJiraComments = false,
   hookRetries = 10,
   projectSettings: ProjectSettings | null = null,
-  gitAuthor?: { name: string; email: string }
+  gitAuthor?: { name: string; email: string },
+  autoReview = false,
+  autoReviewIterations = 5,
+  isPlanRetry = false
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     // Check if task file exists
@@ -2164,8 +2258,144 @@ async function runClaude(
           };
 
           handleCommitWithRetry()
-            .then(async ({ success }) => {
+            .then(async ({ success, result }) => {
               if (!success) {
+                // Check if this is a "plan only" scenario - Claude created a plan but didn't implement
+                const noChangesToCommit = result.message === "No changes to commit";
+                const planPath = noChangesToCommit ? detectPlanOnlyBehavior(stdoutOutput) : null;
+
+                if (noChangesToCommit && planPath && !isPlanRetry) {
+                  // Claude only created a plan - run it again with instructions to implement
+                  console.log("\n🔄 Claude created a plan but didn't implement it. Re-running to execute the plan...");
+
+                  if (planPath !== 'PLAN_DETECTED_NO_PATH') {
+                    console.log(`   Plan file detected: ${planPath}`);
+                  }
+
+                  // Create a new prompt to implement the plan
+                  const implementationPrompt = createPlanImplementationPrompt(planPath, taskContent);
+
+                  // Spawn Claude again with the implementation prompt
+                  const retryProcess: ChildProcess = spawn(
+                    claudePath,
+                    [
+                      "-p",
+                      "--dangerously-skip-permissions",
+                      "--max-turns",
+                      maxTurns.toString(),
+                    ],
+                    {
+                      stdio: ["pipe", "pipe", "pipe"],
+                    }
+                  );
+
+                  let retryStdoutOutput = "";
+                  let retryStderrOutput = "";
+
+                  if (retryProcess.stdout) {
+                    retryProcess.stdout.on("data", (data: Buffer) => {
+                      const output = data.toString();
+                      retryStdoutOutput += output;
+                      process.stdout.write(output);
+                    });
+                  }
+
+                  if (retryProcess.stderr) {
+                    retryProcess.stderr.on("data", (data: Buffer) => {
+                      const output = data.toString();
+                      retryStderrOutput += output;
+                      process.stderr.write(output);
+                    });
+                  }
+
+                  if (retryProcess.stdin) {
+                    retryProcess.stdin.write(implementationPrompt);
+                    retryProcess.stdin.end();
+                  }
+
+                  retryProcess.on("close", async (retryCode: number | null) => {
+                    console.log("\n" + "=".repeat(60));
+
+                    if (retryCode === 0) {
+                      console.log("✅ Plan implementation completed");
+
+                      // Save updated implementation summary
+                      if (taskKey && retryStdoutOutput.trim()) {
+                        try {
+                          const summaryFile = join(
+                            dirname(taskFile),
+                            "implementation-summary.md"
+                          );
+                          writeFileSync(
+                            summaryFile,
+                            `# Plan Implementation Output\n\n${retryStdoutOutput}`,
+                            "utf8"
+                          );
+                          console.log(`\n💾 Updated implementation summary: ${summaryFile}`);
+                        } catch (saveError) {
+                          console.warn(`⚠️  Failed to save implementation summary: ${saveError}`);
+                        }
+                      }
+
+                      // Try to commit the changes from plan implementation
+                      console.log("\n📝 Committing plan implementation changes...");
+                      const retryCommitResult = await Utils.commitChanges(taskKey, taskSummary, {
+                        verbose: options.verbose,
+                        author: gitAuthor,
+                      });
+
+                      if (retryCommitResult.success) {
+                        console.log(`✅ ${retryCommitResult.message}`);
+
+                        // Continue with PR creation if requested
+                        if (createPr && issue) {
+                          // Push and create PR (simplified - using existing logic pattern)
+                          console.log("\n📤 Pushing branch to remote...");
+                          const pushResult = await Utils.executeGitCommand(
+                            ["push", "-u", "origin", "HEAD"],
+                            { verbose: options.verbose }
+                          );
+
+                          if (pushResult.success) {
+                            console.log("✅ Branch pushed successfully");
+
+                            // Post implementation comment to JIRA if enabled
+                            if (jiraClient && !skipJiraComments && retryStdoutOutput.trim()) {
+                              try {
+                                await postImplementationComment(
+                                  taskKey,
+                                  retryStdoutOutput,
+                                  taskSummary
+                                );
+                              } catch (commentError) {
+                                console.warn(`⚠️  Failed to post implementation comment: ${commentError}`);
+                              }
+                            }
+                          } else {
+                            console.log(`⚠️  Failed to push: ${pushResult.error}`);
+                          }
+                        }
+                      } else {
+                        console.log(`⚠️  ${retryCommitResult.message}`);
+                        console.log(
+                          'You can commit changes manually with: git add . && git commit -m "feat: implement task"'
+                        );
+                      }
+                    } else {
+                      console.log("⚠️  Plan implementation failed");
+                    }
+
+                    resolve();
+                  });
+
+                  retryProcess.on("error", (error: Error) => {
+                    console.error(`❌ Failed to re-run Claude: ${error.message}`);
+                    resolve();
+                  });
+
+                  return;
+                }
+
                 console.log(
                   'You can commit changes manually with: git add . && git commit -m "feat: implement task"'
                 );
@@ -2175,9 +2405,132 @@ async function runClaude(
 
               // Create pull request if requested
               if (createPr && issue) {
+                // Validate pre-push hook locally with retry logic (fix with Claude if needed)
+                const handleLocalHookValidation = async (phase: string) => {
+                  let attempt = 0;
+
+                  while (attempt <= hookRetries) {
+                    attempt++;
+                    const hookResult = await Utils.runPrePushHookLocally({
+                      verbose: options.verbose,
+                    });
+
+                    if (hookResult.success) {
+                      if (attempt === 1) {
+                        console.log(`✅ ${hookResult.message}`);
+                      } else {
+                        console.log(`✅ Pre-push hook passed after ${attempt} attempt(s)`);
+                      }
+                      return { success: true, result: hookResult };
+                    }
+
+                    // Check if this is a hook error that we can try to fix
+                    if (hookResult.hookError && attempt <= hookRetries) {
+                      console.log(`\n⚠️  Pre-push hook failed during ${phase} (attempt ${attempt}/${hookRetries + 1})`);
+
+                      // Try to fix the hook error with Claude
+                      const fixed = await runClaudeToFixGitHook(
+                        "push",
+                        claudePath,
+                        maxTurns
+                      );
+
+                      // Log the hook error to file
+                      logHookErrorToFile(
+                        taskKey,
+                        "push-local-validation",
+                        attempt,
+                        hookResult.hookError,
+                        fixed
+                      );
+
+                      if (fixed) {
+                        console.log("\n🔄 Retrying local hook validation after Claude fixed the issues...");
+                        continue;
+                      } else {
+                        console.log("\n❌ Could not fix pre-push hook errors automatically");
+                        return { success: false, result: hookResult };
+                      }
+                    } else {
+                      // Not a hook error or out of retries
+                      if (attempt > hookRetries) {
+                        console.log(`\n❌ Max retries (${hookRetries}) exceeded for pre-push hook fixes`);
+                      }
+                      console.log(`⚠️  ${hookResult.message}`);
+                      return { success: false, result: hookResult };
+                    }
+                  }
+
+                  return { success: false, result: { message: "Max retries exceeded" } };
+                };
+
+                // Step 1: Validate pre-push hook locally BEFORE any push
+                console.log("\n🔍 Validating pre-push hook locally (before pushing)...");
+                const initialHookValidation = await handleLocalHookValidation("initial validation");
+
+                if (!initialHookValidation.success) {
+                  console.log("   Cannot proceed without passing pre-push hook validation");
+                  resolve();
+                  return;
+                }
+
+                // Step 2: Run auto-review with skipPush if enabled
+                // This allows all improvements to be made locally before pushing
+                const currentBranch = await Utils.getCurrentBranch();
+                let autoReviewRan = false;
+
+                if (autoReview && currentBranch) {
+                  try {
+                    console.log("\n🔄 Running auto-review loop (without pushing)...");
+
+                    // Calculate task output directory
+                    const baseOutputDir =
+                      process.env.CLAUDE_INTERN_OUTPUT_DIR || "/tmp/claude-intern-tasks";
+                    const taskDir = taskKey
+                      ? join(baseOutputDir, taskKey.toLowerCase())
+                      : join(baseOutputDir, `auto-review-${Date.now()}`);
+
+                    const autoReviewResult = await runAutoReviewLoop({
+                      repository: "local/repo", // Placeholder - not used when skipPush is true
+                      prNumber: 0, // Placeholder - PR doesn't exist yet
+                      prBranch: currentBranch,
+                      baseBranch: prTargetBranch,
+                      claudePath,
+                      maxIterations: autoReviewIterations,
+                      minPriority: 'medium',
+                      workingDir: process.cwd(),
+                      outputDir: taskDir,
+                      skipPush: true, // Don't push during auto-review iterations
+                    });
+
+                    // Save final summary
+                    const summaryPath = join(taskDir, 'auto-review-summary.json');
+                    writeFileSync(summaryPath, JSON.stringify(autoReviewResult, null, 2));
+                    console.log(`\n📄 Auto-review summary saved to: ${summaryPath}`);
+
+                    autoReviewRan = true;
+
+                    // Step 3: After auto-review, validate hooks again (auto-review changes may have broken things)
+                    console.log("\n🔍 Re-validating pre-push hook after auto-review improvements...");
+                    const postAutoReviewValidation = await handleLocalHookValidation("post auto-review validation");
+
+                    if (!postAutoReviewValidation.success) {
+                      console.log("   Cannot proceed - auto-review changes failed pre-push hook validation");
+                      resolve();
+                      return;
+                    }
+                  } catch (autoReviewError) {
+                    console.warn(
+                      `\n⚠️  Auto-review loop failed: ${(autoReviewError as Error).message}`
+                    );
+                    console.log('   Continuing with push and PR creation...');
+                  }
+                }
+
+                // Step 4: Now do the actual push (hooks already validated, should succeed)
                 console.log("\n📤 Pushing branch to remote...");
 
-                // Try pushing with retry logic for git hook failures
+                // Push with retry logic (hooks should pass, but network issues can occur)
                 const handlePushWithRetry = async () => {
                   let attempt = 0;
 
@@ -2194,7 +2547,7 @@ async function runClaude(
 
                     // Check if this is a git hook error that we can try to fix
                     if (pushResult.hookError && attempt <= hookRetries) {
-                      console.log(`\n⚠️  Git pre-push hook failed (attempt ${attempt}/${hookRetries + 1})`);
+                      console.log(`\n⚠️  Git pre-push hook failed during actual push (attempt ${attempt}/${hookRetries + 1})`);
 
                       // Try to fix the hook error with Claude
                       const fixed = await runClaudeToFixGitHook(
@@ -2214,7 +2567,6 @@ async function runClaude(
 
                       if (fixed) {
                         console.log("\n🔄 Retrying push after Claude fixed and amended the commit...");
-                        // Claude was instructed to amend the commit, so just retry the push
                         continue;
                       } else {
                         console.log("\n❌ Could not fix git pre-push hook errors automatically");
@@ -2260,7 +2612,7 @@ async function runClaude(
                   console.log("\n🔀 Creating pull request...");
                   try {
                     const prManager = new PRManager();
-                    const currentBranch = await Utils.getCurrentBranch();
+                    // Note: currentBranch was already fetched earlier for auto-review
 
                     if (currentBranch) {
                       // Safety check: prevent creating PRs from protected branches
@@ -2320,6 +2672,12 @@ async function runClaude(
                           console.log(
                             "\n⏭️  Skipping JIRA status transition (--skip-jira-comments)"
                           );
+                        }
+
+                        // Note: Auto-review loop (if enabled) was already run before pushing
+                        // to minimize CI impact. The code was validated locally first.
+                        if (autoReviewRan) {
+                          console.log("\n✅ Auto-review was completed before push (see summary file for details)");
                         }
                       } else {
                         console.log(

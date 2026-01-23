@@ -22,6 +22,7 @@ import {
 } from "./lib/review-formatter";
 import { Utils } from "./lib/utils";
 import { runClaudeToFixGitHook } from "./lib/git-hook-fixer";
+import { runAutoReviewLoop } from "./lib/auto-review-loop";
 import {
   handlePingEvent,
   isGitHubIP,
@@ -46,6 +47,8 @@ const DEFAULT_CONFIG: WebhookServerConfig = {
   host: process.env.WEBHOOK_HOST || "0.0.0.0",
   webhookSecret: process.env.WEBHOOK_SECRET || "",
   autoReply: process.env.WEBHOOK_AUTO_REPLY === "true",
+  autoReview: process.env.WEBHOOK_AUTO_REVIEW === "true",
+  autoReviewMaxIterations: parseInt(process.env.WEBHOOK_AUTO_REVIEW_MAX_ITERATIONS || "5", 10),
   validateIp: process.env.WEBHOOK_VALIDATE_IP === "true",
   debug: process.env.WEBHOOK_DEBUG === "true",
 };
@@ -70,6 +73,55 @@ function debugLog(config: WebhookServerConfig, message: string): void {
   if (config.debug) {
     console.log(`[DEBUG] ${message}`);
   }
+}
+
+/**
+ * Trigger phrases that indicate the reviewer wants an auto-review loop
+ * instead of addressing specific comments.
+ */
+const AUTO_REVIEW_TRIGGER_PHRASES = [
+  "enhance",
+  "improve",
+  "improve pr",
+  "improve this",
+  "improve this pr",
+  "make it better",
+  "polish",
+  "refine",
+  "clean up",
+  "cleanup",
+  "self-review",
+  "self review",
+  "auto-review",
+  "auto review",
+  "review yourself",
+  "review it",
+];
+
+/**
+ * Check if a review body contains an auto-review trigger phrase.
+ * Returns true if the review body (after removing bot mention) matches a trigger phrase.
+ */
+function isAutoReviewTrigger(reviewBody: string | null, botName?: string): boolean {
+  if (!reviewBody) return false;
+
+  // Remove bot mention if present (e.g., "@claude-intern[bot]" or "@claude-intern")
+  let normalizedBody = reviewBody.toLowerCase().trim();
+  if (botName) {
+    // Strip [bot] suffix from botName if present to get the base name
+    const baseBotName = botName.toLowerCase().replace(/\[bot\]$/, "");
+
+    // Remove various forms of bot mention (with and without [bot] suffix)
+    normalizedBody = normalizedBody
+      .replace(new RegExp(`@${baseBotName}\\[bot\\]`, "g"), "")
+      .replace(new RegExp(`@${baseBotName}`, "g"), "")
+      .trim();
+  }
+
+  // Check if the remaining text matches a trigger phrase
+  return AUTO_REVIEW_TRIGGER_PHRASES.some(
+    (phrase) => normalizedBody === phrase || normalizedBody === phrase + "."
+  );
 }
 
 /**
@@ -423,6 +475,52 @@ async function processReviewAsync(
       console.log(`🤖 Git author set to: ${gitAuthor.name}`);
     }
 
+    // Check if this is an auto-review trigger (e.g., "@bot enhance", "@bot improve")
+    const botName = await githubClient.getBotUsername(owner, repo);
+    const reviewBody = event.review.body;
+    const isAutoReviewRequest = isAutoReviewTrigger(reviewBody, botName || undefined);
+
+    if (isAutoReviewRequest && config.autoReview) {
+      console.log(`\n🔄 Auto-review trigger detected: "${reviewBody?.trim()}"`);
+      console.log("   Skipping normal review flow, running auto-review loop directly...");
+
+      const autoReviewOutputDir = `/tmp/claude-intern-auto-review-${prNumber}`;
+      const baseBranch = event.pull_request.base.ref;
+      try {
+        const autoReviewResult = await runAutoReviewLoop({
+          repository: `${owner}/${repo}`,
+          prNumber,
+          prBranch: branch,
+          baseBranch,
+          claudePath: process.env.CLAUDE_CLI_PATH || "claude",
+          maxIterations: config.autoReviewMaxIterations,
+          minPriority: "medium",
+          workingDir: worktreePath,
+          outputDir: autoReviewOutputDir,
+        });
+
+        if (autoReviewResult.success) {
+          console.log(`✅ Auto-review completed successfully after ${autoReviewResult.iterations} iteration(s)`);
+        } else {
+          console.warn(`⚠️  Auto-review completed but some issues remain after ${autoReviewResult.iterations} iteration(s)`);
+        }
+
+        // Post reply if auto-reply is enabled
+        if (config.autoReply) {
+          console.log("💬 Posting auto-review summary reply...");
+          const summary = `🤖 Auto-review completed after ${autoReviewResult.iterations} iteration(s). ${autoReviewResult.success ? "All medium+ priority issues addressed." : "Some issues may remain."}`;
+          await postAutoReviewReply(githubClient, owner, repo, prNumber, summary);
+        }
+
+        console.log(`\n✅ Successfully completed auto-review for PR #${prNumber}`);
+        return;
+      } catch (error) {
+        console.error(`❌ Auto-review loop failed: ${(error as Error).message}`);
+        // Don't fall through to normal flow - just return
+        return;
+      }
+    }
+
     // Format prompt for Claude
     const prompt = formatReviewPrompt(feedback);
 
@@ -534,8 +632,106 @@ async function processReviewAsync(
       console.warn("⚠️  No new commits to push - Claude may not have made any changes");
       // Still continue to mark comments as addressed
     } else {
-      // Push changes with hook retry logic
-      console.log(`\n📤 Pushing ${finalCommitsAhead} commit(s)...`);
+      // Helper function for local hook validation with retry
+      const validateLocalHook = async (phase: string): Promise<boolean> => {
+        let attempt = 0;
+
+        while (attempt <= hookRetries) {
+          attempt++;
+          const hookResult = await Utils.runPrePushHookLocally({
+            verbose: config.debug,
+            cwd: worktreePath,
+          });
+
+          if (hookResult.success) {
+            if (attempt === 1) {
+              console.log(`✅ ${hookResult.message}`);
+            } else {
+              console.log(`✅ Pre-push hook passed after ${attempt} attempt(s)`);
+            }
+            return true;
+          }
+
+          // Check if this is a hook error that we can try to fix
+          if (hookResult.hookError && attempt <= hookRetries) {
+            console.log(`\n⚠️  Pre-push hook failed during ${phase} (attempt ${attempt}/${hookRetries + 1})`);
+
+            // Try to fix the hook error with Claude
+            const fixed = await runClaudeToFixGitHook("push", claudePath, maxTurns, worktreePath);
+
+            if (fixed) {
+              console.log("\n🔄 Retrying local hook validation after Claude fixed the issues...");
+              continue;
+            } else {
+              console.log("\n❌ Could not fix pre-push hook errors automatically");
+              return false;
+            }
+          } else {
+            // Not a hook error or out of retries
+            if (attempt > hookRetries) {
+              console.log(`\n❌ Max retries (${hookRetries}) exceeded for pre-push hook fixes`);
+            }
+            console.error(`\n❌ Pre-push hook validation failed: ${hookResult.message}`);
+            return false;
+          }
+        }
+
+        return false;
+      };
+
+      // Step 1: Validate pre-push hook locally BEFORE any push
+      console.log("\n🔍 Validating pre-push hook locally (before pushing)...");
+      const initialHookValid = await validateLocalHook("initial validation");
+
+      if (!initialHookValid) {
+        console.error("❌ Cannot proceed without passing pre-push hook validation");
+        return;
+      }
+
+      // Step 2: Run auto-review loop with skipPush if enabled
+      // This allows all improvements to be made locally before pushing
+      let autoReviewRan = false;
+      if (config.autoReview) {
+        console.log("\n🔄 Running auto-review loop (without pushing)...");
+        const autoReviewOutputDir = `/tmp/claude-intern-auto-review-${prNumber}`;
+        const baseBranchForReview = event.pull_request.base.ref;
+        try {
+          const autoReviewResult = await runAutoReviewLoop({
+            repository: `${owner}/${repo}`,
+            prNumber,
+            prBranch: branch,
+            baseBranch: baseBranchForReview,
+            claudePath: process.env.CLAUDE_CLI_PATH || "claude",
+            maxIterations: config.autoReviewMaxIterations,
+            minPriority: "medium",
+            workingDir: worktreePath,
+            outputDir: autoReviewOutputDir,
+            skipPush: true, // Don't push during auto-review iterations
+          });
+
+          if (autoReviewResult.success) {
+            console.log(`✅ Auto-review completed successfully after ${autoReviewResult.iterations} iteration(s)`);
+          } else {
+            console.warn(`⚠️  Auto-review completed but some issues remain after ${autoReviewResult.iterations} iteration(s)`);
+          }
+          autoReviewRan = true;
+
+          // Step 3: Re-validate local hook after auto-review (auto-review changes may have broken things)
+          console.log("\n🔍 Re-validating pre-push hook after auto-review improvements...");
+          const postAutoReviewHookValid = await validateLocalHook("post auto-review validation");
+
+          if (!postAutoReviewHookValid) {
+            console.error("❌ Cannot proceed - auto-review changes failed pre-push hook validation");
+            return;
+          }
+        } catch (error) {
+          console.error(`❌ Auto-review loop failed: ${(error as Error).message}`);
+          // Continue with push even if auto-review fails
+        }
+      }
+
+      // Step 4: Now do the actual push (hooks already validated, should succeed)
+      console.log(`\n📤 Pushing ${finalCommitsAhead}${autoReviewRan ? "+ auto-review" : ""} commit(s)...`);
 
       let pushAttempt = 0;
       let pushSuccess = false;
@@ -552,7 +748,7 @@ async function processReviewAsync(
 
         // Check if this is a git hook error that we can try to fix
         if (pushResult.hookError && pushAttempt <= hookRetries) {
-          console.log(`\n⚠️  Git pre-push hook failed (attempt ${pushAttempt}/${hookRetries + 1})`);
+          console.log(`\n⚠️  Git pre-push hook failed during actual push (attempt ${pushAttempt}/${hookRetries + 1})`);
 
           // Try to fix the hook error with Claude
           const fixed = await runClaudeToFixGitHook("push", claudePath, maxTurns, worktreePath);
@@ -732,7 +928,7 @@ async function postReviewReply(
       return;
     }
 
-    const response = await fetch(
+    const response = await Utils.fetchWithRetry(
       `https://api.github.com/repos/${owner}/${repo}/issues/${prNumber}/comments`,
       {
         method: "POST",
@@ -753,6 +949,24 @@ async function postReviewReply(
     }
   } catch (error) {
     console.warn(`⚠️  Failed to post review reply: ${(error as Error).message}`);
+  }
+}
+
+/**
+ * Post a simple auto-review reply to a PR.
+ */
+async function postAutoReviewReply(
+  client: GitHubReviewsClient,
+  owner: string,
+  repo: string,
+  prNumber: number,
+  message: string
+): Promise<void> {
+  try {
+    await client.postPullRequestComment(owner, repo, prNumber, message);
+    console.log("✅ Posted auto-review reply");
+  } catch (error) {
+    console.warn(`⚠️  Failed to post auto-review reply: ${(error as Error).message}`);
   }
 }
 
@@ -822,6 +1036,7 @@ export async function startWebhookServer(
   console.log(`   Port: ${finalConfig.port}`);
   console.log(`   Host: ${finalConfig.host}`);
   console.log(`   Auto-reply: ${finalConfig.autoReply}`);
+  console.log(`   Auto-review: ${finalConfig.autoReview}${finalConfig.autoReview ? ` (max ${finalConfig.autoReviewMaxIterations} iterations)` : ""}`);
   console.log(`   IP validation: ${finalConfig.validateIp}`);
   console.log(`   Debug mode: ${finalConfig.debug}`);
 

@@ -1,5 +1,6 @@
 import type { AtlassianDocument, JiraIssue } from "../types/jira";
 import { GitHubAppAuth } from "./github-app-auth";
+import { Utils } from "./utils";
 
 export interface PRInfo {
   title: string;
@@ -92,7 +93,7 @@ export class GitHubPRClient extends PRClient {
       const [owner, repo] = prInfo.repository.split("/");
       const url = `${this.baseUrl}/repos/${owner}/${repo}/pulls`;
 
-      const response = await fetch(url, {
+      const response = await Utils.fetchWithRetry(url, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${this.token}`,
@@ -152,7 +153,7 @@ export class BitbucketPRClient extends PRClient {
     try {
       const url = `${this.baseUrl}/repositories/${this.workspace}/${prInfo.repository}/pullrequests`;
 
-      const response = await fetch(url, {
+      const response = await Utils.fetchWithRetry(url, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${this.token}`,

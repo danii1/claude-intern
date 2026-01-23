@@ -9,6 +9,7 @@ import type {
   ProcessedReviewComment,
 } from "../types/github-webhooks";
 import { GitHubAppAuth } from "./github-app-auth";
+import { Utils } from "./utils";
 
 export interface ReviewsClientConfig {
   token?: string;
@@ -85,7 +86,7 @@ export class GitHubReviewsClient {
 
       // For personal access tokens, try /user endpoint
       if (this.token) {
-        const response = await fetch(`${this.baseUrl}/user`, {
+        const response = await Utils.fetchWithRetry(`${this.baseUrl}/user`, {
           method: "GET",
           headers: {
             Authorization: `Bearer ${this.token}`,
@@ -114,7 +115,7 @@ export class GitHubReviewsClient {
   }
 
   /**
-   * Make an authenticated API request.
+   * Make an authenticated API request with automatic retry on transient failures.
    */
   private async apiRequest<T>(
     method: string,
@@ -126,7 +127,7 @@ export class GitHubReviewsClient {
     const token = await this.getToken(owner, repo);
     const url = `${this.baseUrl}${path}`;
 
-    const response = await fetch(url, {
+    const response = await Utils.fetchWithRetry(url, {
       method,
       headers: {
         Authorization: `Bearer ${token}`,
@@ -436,7 +437,7 @@ export class GitHubReviewsClient {
     const token = await this.getToken(owner, repo);
     const url = `${this.baseUrl}/repos/${owner}/${repo}/pulls/${prNumber}`;
 
-    const response = await fetch(url, {
+    const response = await Utils.fetchWithRetry(url, {
       method: "GET",
       headers: {
         Authorization: `Bearer ${token}`,
