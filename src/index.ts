@@ -1844,21 +1844,32 @@ ${"=".repeat(80)}
  * Returns the plan file path if detected, null otherwise.
  */
 function detectPlanOnlyBehavior(claudeOutput: string): string | null {
-  // Check for common plan creation patterns
+  // Check for common plan creation patterns (specific phrases first)
   const planCreationPatterns = [
     /I'?ve created (a|an|the) (comprehensive )?(implementation )?plan/i,
     /created a plan for/i,
     /plan has been created/i,
     /implementation plan is (now )?ready/i,
+    /The plan is (now )?ready/i,
+    /plan is ready for (your )?review/i,
+    /Here'?s a summary:?\s*\n+##.*plan/i,
     /drafted a plan/i,
     /wrote out a plan/i,
+    /plan (file )?(is )?(available|saved)/i,
+    /##.*plan.*summary/i,
   ];
 
   const hasPlanCreationLanguage = planCreationPatterns.some(pattern =>
     pattern.test(claudeOutput)
   );
 
-  if (!hasPlanCreationLanguage) {
+  // Fallback: if "plan" appears with context suggesting plan-only behavior
+  // (since this function is only called when there are no changes to commit)
+  const hasPlanFallback = !hasPlanCreationLanguage &&
+    /\bplan\b/i.test(claudeOutput) &&
+    (/summary|review|ready|created|implementation|approach|steps|changes (required|needed)/i.test(claudeOutput));
+
+  if (!hasPlanCreationLanguage && !hasPlanFallback) {
     return null;
   }
 
