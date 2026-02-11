@@ -110,6 +110,16 @@ function generateFixPrompt(
     )
     .join('\n\n');
 
+  const commitInstruction = iteration === 1
+    ? `4. After making changes, commit them with a descriptive message:
+   - Format: "fix: address PR review feedback"
+   - Include which issues were fixed in the commit body
+   - DO NOT push - this will be done automatically`
+    : `4. After making changes, amend them into the previous commit:
+   - Use: git commit --amend
+   - Extend the existing commit message by appending a new line describing iteration ${iteration} fixes
+   - DO NOT push - this will be done automatically`;
+
   return `You received the following feedback on your pull request implementation. Please address each item systematically.
 
 ## Review Iteration ${iteration}
@@ -121,15 +131,12 @@ ${itemsList}
 1. Address each feedback item in order of priority (critical → high → medium)
 2. Make minimal, focused changes to fix the issues
 3. Ensure you don't introduce new bugs while fixing existing ones
-4. After making changes, commit them with a descriptive message:
-   - Format: "fix: address PR review feedback (iteration ${iteration})"
-   - Include which issues were fixed in the commit body
+${commitInstruction}
 
 **IMPORTANT**:
 - Focus on the specific issues mentioned
 - Don't make unrelated changes
 - Test your changes if possible
-- Commit your work when done (DO NOT push - this will be done automatically)
 `;
 }
 
@@ -325,46 +332,89 @@ function filterByPriority(items: ReviewFeedbackItem[], minPriority: ReviewPriori
 }
 
 /**
- * Commit changes made by Claude
+ * Stage all changes and check if there's anything to commit.
+ * Returns true if there are staged changes.
+ */
+function stageChanges(workingDir: string): boolean {
+  execSync('git add -A', {
+    cwd: workingDir,
+    maxBuffer: 10 * 1024 * 1024,
+  });
+
+  const status = execSync('git status --porcelain', {
+    cwd: workingDir,
+    encoding: 'utf-8',
+    maxBuffer: 10 * 1024 * 1024,
+  });
+
+  return status.trim() !== '';
+}
+
+/**
+ * Create a new commit with the given message.
  */
 function commitChanges(message: string, workingDir: string): void {
   try {
-    // Stage all changes
-    execSync('git add -A', {
-      cwd: workingDir,
-      maxBuffer: 10 * 1024 * 1024, // 10MB buffer
-    });
-
-    // Check if there are changes to commit
-    const status = execSync('git status --porcelain', {
-      cwd: workingDir,
-      encoding: 'utf-8',
-      maxBuffer: 10 * 1024 * 1024, // 10MB buffer
-    });
-
-    if (status.trim() === '') {
+    if (!stageChanges(workingDir)) {
       console.log('No changes to commit');
       return;
     }
 
-    // Commit
-    execSync(`git commit -m "${message}"`, {
+    execSync(`git commit -m ${shellEscape(message)}`, {
       cwd: workingDir,
-      maxBuffer: 10 * 1024 * 1024, // 10MB buffer for pre-commit hooks
+      maxBuffer: 10 * 1024 * 1024,
       encoding: 'utf-8',
     });
-    console.log(`Committed: ${message}`);
+    console.log(`Committed: ${message.split('\n')[0]}`);
   } catch (error) {
     throw new Error(`Failed to commit changes: ${error}`);
   }
 }
 
 /**
+ * Amend the previous commit, extending its message with additional lines.
+ */
+function amendCommit(additionalMessage: string, workingDir: string): void {
+  try {
+    if (!stageChanges(workingDir)) {
+      console.log('No changes to amend');
+      return;
+    }
+
+    // Get existing commit message
+    const existingMessage = execSync('git log -1 --format=%B', {
+      cwd: workingDir,
+      encoding: 'utf-8',
+      maxBuffer: 10 * 1024 * 1024,
+    }).trimEnd();
+
+    const newMessage = `${existingMessage}\n\n${additionalMessage}`;
+
+    execSync(`git commit --amend -m ${shellEscape(newMessage)}`, {
+      cwd: workingDir,
+      maxBuffer: 10 * 1024 * 1024,
+      encoding: 'utf-8',
+    });
+    console.log(`Amended commit with: ${additionalMessage.split('\n')[0]}`);
+  } catch (error) {
+    throw new Error(`Failed to amend commit: ${error}`);
+  }
+}
+
+/**
+ * Escape a string for safe use as a shell argument.
+ */
+function shellEscape(s: string): string {
+  return "'" + s.replace(/'/g, "'\\''") + "'";
+}
+
+/**
  * Push changes to remote
  */
-function pushChanges(branch: string, workingDir: string): void {
+function pushChanges(branch: string, workingDir: string, forceWithLease = false): void {
   try {
-    execSync(`git push origin ${branch}`, {
+    const forceFlag = forceWithLease ? ' --force-with-lease' : '';
+    execSync(`git push${forceFlag} origin ${branch}`, {
       cwd: workingDir,
       maxBuffer: 10 * 1024 * 1024, // 10MB buffer for git hooks output
       encoding: 'utf-8',
@@ -515,17 +565,22 @@ export async function runAutoReviewLoop(options: AutoReviewLoopOptions): Promise
       // Continue to next iteration even if fixes fail
     }
 
-    // Step 6: Commit changes
+    // Step 6: Commit changes (first iteration creates, subsequent amend)
     try {
-      commitChanges(`fix: address PR review feedback (iteration ${iteration})`, workingDir);
+      if (iteration === 1) {
+        commitChanges('fix: address PR review feedback', workingDir);
+      } else {
+        amendCommit(`Iteration ${iteration}: address additional review feedback`, workingDir);
+      }
     } catch (error) {
       console.log(`⚠️  No changes committed: ${error}`);
     }
 
     // Step 7: Push changes (unless skipPush is enabled)
+    // After amending (iteration 2+), force-with-lease is needed
     if (!skipPush) {
       console.log('📤 Pushing changes...');
-      pushChanges(prBranch, workingDir);
+      pushChanges(prBranch, workingDir, iteration > 1);
     } else {
       console.log('⏸️  Skipping push (deferred mode)');
     }
