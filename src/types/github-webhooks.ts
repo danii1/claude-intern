@@ -183,7 +183,6 @@ export interface WebhookServerConfig {
   port: number;
   host: string;
   webhookSecret: string;
-  autoReply: boolean;
   autoReview: boolean;
   autoReviewMaxIterations: number;
   validateIp: boolean;

@@ -7,11 +7,7 @@
 import { spawn, type ChildProcess } from "child_process";
 import { GitHubReviewsClient } from "./github-reviews";
 import { GitHubAppAuth } from "./github-app-auth";
-import {
-  extractClaudeSummary,
-  formatReviewPrompt,
-  formatReviewSummaryReply,
-} from "./review-formatter";
+import { formatReviewPrompt } from "./review-formatter";
 import { Utils } from "./utils";
 import { runClaudeToFixGitHook } from "./git-hook-fixer";
 import type {
@@ -175,8 +171,7 @@ async function markCommentsAddressed(
   repo: string,
   prNumber: number,
   comments: ProcessedReviewComment[],
-  conversationComments: ProcessedConversationComment[],
-  changesSummary: string
+  conversationComments: ProcessedConversationComment[]
 ): Promise<void> {
   if (comments.length === 0 && conversationComments.length === 0) {
     return;
@@ -219,16 +214,6 @@ async function markCommentsAddressed(
 
   if (successCount > 0) {
     console.log(`✅ Marked ${successCount} comment(s) as addressed with 🎉 reaction`);
-  }
-
-  // Post a single summary comment
-  const totalComments = comments.length + conversationComments.length;
-  const summaryBody = formatReviewSummaryReply(successCount, totalComments, changesSummary);
-  try {
-    await client.postPullRequestComment(owner, repo, prNumber, summaryBody);
-    console.log("✅ Posted review summary comment");
-  } catch (error) {
-    console.warn(`⚠️  Failed to post summary: ${(error as Error).message}`);
   }
 }
 
@@ -611,17 +596,13 @@ export async function addressReview(
     if (!noReply && !noPush) {
       console.log("\n💬 Marking comments as addressed...");
 
-      // Extract summary from Claude's output
-      const changesSummary = extractClaudeSummary(claudeResult.output);
-
       await markCommentsAddressed(
         githubClient,
         owner,
         repo,
         prNumber,
         processedComments,
-        processedConversationComments,
-        changesSummary
+        processedConversationComments
       );
     } else if (noReply) {
       console.log("\n⏭️  Skipping marking comments (--no-reply flag)");

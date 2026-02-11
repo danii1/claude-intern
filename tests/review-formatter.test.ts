@@ -2,7 +2,6 @@ import { describe, test, expect } from "bun:test";
 import {
   formatReviewPrompt,
   formatReplyMessage,
-  formatReviewSummaryReply,
   formatSingleCommentPrompt,
 } from "../src/lib/review-formatter";
 import type {
@@ -204,30 +203,6 @@ describe("Review Formatter", () => {
     });
   });
 
-  describe("formatReviewSummaryReply", () => {
-    test("should show all addressed when complete", () => {
-      const summary = formatReviewSummaryReply(5, 5);
-
-      expect(summary).toContain("✅");
-      expect(summary).toContain("All 5 comment(s)");
-      expect(summary).toContain("Claude Intern");
-    });
-
-    test("should show partial count when incomplete", () => {
-      const summary = formatReviewSummaryReply(3, 5);
-
-      expect(summary).toContain("📝");
-      expect(summary).toContain("3 of 5");
-      expect(summary).toContain("manual attention");
-    });
-
-    test("should include Claude Intern branding", () => {
-      const summary = formatReviewSummaryReply(1, 1);
-
-      expect(summary).toContain("Claude Intern");
-      expect(summary).toContain("github.com/danii1/claude-intern");
-    });
-  });
 
   describe("formatSingleCommentPrompt", () => {
     test("should format single comment prompt", () => {

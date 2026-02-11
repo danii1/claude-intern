@@ -15,11 +15,7 @@ import PQueue from "p-queue";
 import { GitHubAppAuth } from "./lib/github-app-auth";
 import { GitHubReviewsClient } from "./lib/github-reviews";
 import { WebhookQueue } from "./lib/webhook-queue";
-import {
-  extractClaudeSummary,
-  formatReviewPrompt,
-  formatReviewSummaryReply,
-} from "./lib/review-formatter";
+import { formatReviewPrompt } from "./lib/review-formatter";
 import { Utils } from "./lib/utils";
 import { runClaudeToFixGitHook } from "./lib/git-hook-fixer";
 import { runAutoReviewLoop } from "./lib/auto-review-loop";
@@ -46,7 +42,6 @@ const DEFAULT_CONFIG: WebhookServerConfig = {
   port: parseInt(process.env.WEBHOOK_PORT || "3000", 10),
   host: process.env.WEBHOOK_HOST || "0.0.0.0",
   webhookSecret: process.env.WEBHOOK_SECRET || "",
-  autoReply: process.env.WEBHOOK_AUTO_REPLY === "true",
   autoReview: process.env.WEBHOOK_AUTO_REVIEW === "true",
   autoReviewMaxIterations: parseInt(process.env.WEBHOOK_AUTO_REVIEW_MAX_ITERATIONS || "5", 10),
   validateIp: process.env.WEBHOOK_VALIDATE_IP === "true",
@@ -505,13 +500,6 @@ async function processReviewAsync(
           console.warn(`⚠️  Auto-review completed but some issues remain after ${autoReviewResult.iterations} iteration(s)`);
         }
 
-        // Post reply if auto-reply is enabled
-        if (config.autoReply) {
-          console.log("💬 Posting auto-review summary reply...");
-          const summary = `🤖 Auto-review completed after ${autoReviewResult.iterations} iteration(s). ${autoReviewResult.success ? "All medium+ priority issues addressed." : "Some issues may remain."}`;
-          await postAutoReviewReply(githubClient, owner, repo, prNumber, summary);
-        }
-
         console.log(`\n✅ Successfully completed auto-review for PR #${prNumber}`);
         return;
       } catch (error) {
@@ -779,16 +767,6 @@ async function processReviewAsync(
     // Mark comments as addressed with hooray reaction
     await markCommentsAsAddressed(githubClient, owner, repo, processedComments, config.debug);
 
-    // Post reply if auto-reply is enabled
-    if (config.autoReply) {
-      console.log("💬 Posting review summary reply...");
-      // Extract summary from Claude's output
-      const changesSummary = claudeResult.output
-        ? extractClaudeSummary(claudeResult.output)
-        : undefined;
-      await postReviewReply(githubClient, owner, repo, prNumber, feedback, changesSummary);
-    }
-
     console.log(`\n✅ Successfully addressed review for PR #${prNumber}`);
   } catch (error) {
     console.error(`❌ Error processing review: ${(error as Error).message}`);
@@ -902,75 +880,6 @@ async function runClaudeForReview(
 }
 
 /**
- * Post a summary reply to the review.
- */
-async function postReviewReply(
-  client: GitHubReviewsClient,
-  owner: string,
-  repo: string,
-  prNumber: number,
-  feedback: ProcessedReviewFeedback,
-  changesSummary?: string
-): Promise<void> {
-  try {
-    const summary = formatReviewSummaryReply(
-      feedback.comments.length,
-      feedback.comments.length,
-      changesSummary
-    );
-
-    // Create a review comment (general comment on the PR)
-    // Note: GitHub API doesn't have a direct "reply to review" endpoint,
-    // so we create a new issue comment
-    const token = process.env.GITHUB_TOKEN;
-    if (!token) {
-      console.warn("⚠️  No GITHUB_TOKEN for posting reply");
-      return;
-    }
-
-    const response = await Utils.fetchWithRetry(
-      `https://api.github.com/repos/${owner}/${repo}/issues/${prNumber}/comments`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: "application/vnd.github.v3+json",
-          "Content-Type": "application/json",
-          "User-Agent": "claude-intern",
-        },
-        body: JSON.stringify({ body: summary }),
-      }
-    );
-
-    if (response.ok) {
-      console.log("✅ Posted review summary reply");
-    } else {
-      console.warn(`⚠️  Failed to post reply: ${response.statusText}`);
-    }
-  } catch (error) {
-    console.warn(`⚠️  Failed to post review reply: ${(error as Error).message}`);
-  }
-}
-
-/**
- * Post a simple auto-review reply to a PR.
- */
-async function postAutoReviewReply(
-  client: GitHubReviewsClient,
-  owner: string,
-  repo: string,
-  prNumber: number,
-  message: string
-): Promise<void> {
-  try {
-    await client.postPullRequestComment(owner, repo, prNumber, message);
-    console.log("✅ Posted auto-review reply");
-  } catch (error) {
-    console.warn(`⚠️  Failed to post auto-review reply: ${(error as Error).message}`);
-  }
-}
-
-/**
  * Health check handler.
  */
 function handleHealthCheck(): Response {
@@ -1035,7 +944,6 @@ export async function startWebhookServer(
   console.log("🚀 Starting Claude Intern Webhook Server");
   console.log(`   Port: ${finalConfig.port}`);
   console.log(`   Host: ${finalConfig.host}`);
-  console.log(`   Auto-reply: ${finalConfig.autoReply}`);
   console.log(`   Auto-review: ${finalConfig.autoReview}${finalConfig.autoReview ? ` (max ${finalConfig.autoReviewMaxIterations} iterations)` : ""}`);
   console.log(`   IP validation: ${finalConfig.validateIp}`);
   console.log(`   Debug mode: ${finalConfig.debug}`);
