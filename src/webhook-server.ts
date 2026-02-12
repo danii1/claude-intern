@@ -220,43 +220,31 @@ async function handleWebhook(
   if (eventType === "pull_request_review") {
     const event = payload as PullRequestReviewEvent;
 
-    // Initialize GitHub client to get bot name and comments
-    const githubClient = new GitHubReviewsClient();
-    const [owner, repo] = event.repository.full_name.split("/");
-
-    // Get bot username for mention checking
-    const botName = await githubClient.getBotUsername(owner, repo);
-
-    debugLog(config, `Bot username: ${botName || "unknown"}`);
-
-    // Fetch ALL review comments for mention checking (not just from this review)
-    const rawComments = await githubClient.getPullRequestReviewComments(
-      owner,
-      repo,
-      event.pull_request.number
-    );
-    const processedComments = rawComments.map(processReviewComment);
-
-    // Check if we should process this review (including bot mention check)
-    if (!shouldProcessReview(event, {
-      requireBotMention: true,
-      botName: botName || undefined,
-      comments: processedComments,
-    })) {
-      let reason = `state=${event.review.state}, pr_state=${event.pull_request.state}`;
-
-      // Add bot mention info if applicable
-      if (botName && event.review.state === "changes_requested" && event.pull_request.state === "open") {
-        reason = `No @${botName} mention found in review`;
-      }
-
-      console.log(
-        `⏭️  Skipping review: ${reason}`
-      );
+    // Quick payload-only checks (no API calls — respond 200 fast)
+    if (event.review.state !== "changes_requested") {
+      debugLog(config, `Skipping: review state is ${event.review.state}`);
       return jsonResponse({
         success: true,
         message: "Review does not require processing",
-        reason,
+        reason: `state=${event.review.state}`,
+      });
+    }
+
+    if (event.review.user.type === "Bot") {
+      debugLog(config, `Skipping: reviewer is a bot (${event.review.user.login})`);
+      return jsonResponse({
+        success: true,
+        message: "Review does not require processing",
+        reason: "reviewer is a bot",
+      });
+    }
+
+    if (event.pull_request.state !== "open") {
+      debugLog(config, `Skipping: PR state is ${event.pull_request.state}`);
+      return jsonResponse({
+        success: true,
+        message: "Review does not require processing",
+        reason: `pr_state=${event.pull_request.state}`,
       });
     }
 
@@ -265,9 +253,6 @@ async function handleWebhook(
     );
     console.log(`   Repository: ${event.repository.full_name}`);
     console.log(`   Reviewer: ${event.review.user.login}`);
-    if (botName) {
-      console.log(`   Bot mention: @${botName} detected`);
-    }
 
     // Persist event to SQLite before processing (crash resilience)
     let eventId: string | undefined;
@@ -277,6 +262,7 @@ async function handleWebhook(
     }
 
     // Add to queue for sequential processing (prevents race conditions)
+    // Bot mention check happens inside processReviewAsync after fetching comments
     reviewQueue.add(() => processReviewWithPersistence(eventId, event, config)).catch((error) => {
       console.error("❌ Error processing review:", error);
     });
@@ -448,7 +434,29 @@ async function processReviewAsync(
     }
     console.log(`   ${rawComments.length} remaining to address`);
 
-    // Process comments
+    // Check bot mention requirement (deferred from handleWebhook to avoid blocking 200 response)
+    // Use ALL comments (before filtering addressed) so we don't miss mentions in addressed comments
+    const allProcessedComments = allRawComments.map(processReviewComment);
+    const botName = await githubClient.getBotUsername(owner, repo);
+    debugLog(config, `Bot username: ${botName || "unknown"}`);
+
+    if (!shouldProcessReview(event, {
+      requireBotMention: true,
+      botName: botName || undefined,
+      comments: allProcessedComments,
+    })) {
+      const reason = botName
+        ? `No @${botName} mention found in review`
+        : "No bot mention found in review";
+      console.log(`⏭️  Skipping review: ${reason}`);
+      return;
+    }
+
+    if (botName) {
+      console.log(`   Bot mention: @${botName} detected`);
+    }
+
+    // Process unaddressed comments for feedback
     const processedComments = rawComments.map(processReviewComment);
 
     // Build feedback object
@@ -471,7 +479,6 @@ async function processReviewAsync(
     }
 
     // Check if this is an auto-review trigger (e.g., "@bot enhance", "@bot improve")
-    const botName = await githubClient.getBotUsername(owner, repo);
     const reviewBody = event.review.body;
     const isAutoReviewRequest = isAutoReviewTrigger(reviewBody, botName || undefined);
 

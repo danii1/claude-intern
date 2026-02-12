@@ -170,6 +170,7 @@ export class Utils {
     const jitter = retryOptions?.jitter ?? true;
 
     let lastError: Error | null = null;
+    let failedAttempts = 0;
 
     for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
       try {
@@ -177,6 +178,8 @@ export class Utils {
 
         // Check if response status is retryable
         if (Utils.RETRYABLE_STATUS_CODES.has(response.status)) {
+          failedAttempts++;
+
           if (attempt > maxRetries) {
             // Return the response anyway on final attempt - let caller handle it
             return response;
@@ -211,10 +214,16 @@ export class Utils {
           continue;
         }
 
-        // Success or non-retryable error - return response
+        // Success or non-retryable error - log recovery if there were prior failures
+        if (failedAttempts > 0) {
+          console.log(
+            `✅ Request to ${url} succeeded on attempt ${attempt}/${maxRetries + 1} (after ${failedAttempts} ${failedAttempts === 1 ? "retry" : "retries"})`
+          );
+        }
         return response;
       } catch (error) {
         lastError = error as Error;
+        failedAttempts++;
 
         // Check if it's a retryable network error
         if (!Utils.isRetryableNetworkError(lastError)) {
