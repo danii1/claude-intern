@@ -2208,6 +2208,132 @@ async function runClaude(
           console.log("✅ Claude execution completed successfully");
         }
 
+        // --- Shared helpers for hook validation, push, and PR creation ---
+        const validatePrePushHook = async (phase: string) => {
+          let attempt = 0;
+          while (attempt <= hookRetries) {
+            attempt++;
+            const hookResult = await Utils.runPrePushHookLocally({
+              verbose: options.verbose,
+            });
+            if (hookResult.success) {
+              if (attempt === 1) {
+                console.log(`✅ ${hookResult.message}`);
+              } else {
+                console.log(`✅ Pre-push hook passed after ${attempt} attempt(s)`);
+              }
+              return { success: true, result: hookResult };
+            }
+            if (hookResult.hookError && attempt <= hookRetries) {
+              console.log(`\n⚠️  Pre-push hook failed during ${phase} (attempt ${attempt}/${hookRetries + 1})`);
+              const fixed = await runClaudeToFixGitHook("push", claudePath, maxTurns);
+              logHookErrorToFile(taskKey ?? "unknown", "push-local-validation", attempt, hookResult.hookError, fixed);
+              if (fixed) {
+                console.log("\n🔄 Retrying local hook validation after Claude fixed the issues...");
+                continue;
+              } else {
+                console.log("\n❌ Could not fix pre-push hook errors automatically");
+                return { success: false, result: hookResult };
+              }
+            } else {
+              if (attempt > hookRetries) {
+                console.log(`\n❌ Max retries (${hookRetries}) exceeded for pre-push hook fixes`);
+              }
+              console.log(`⚠️  ${hookResult.message}`);
+              return { success: false, result: hookResult };
+            }
+          }
+          return { success: false, result: { message: "Max retries exceeded" } };
+        };
+
+        const pushWithHookRetry = async () => {
+          console.log("\n📤 Pushing branch to remote...");
+          let attempt = 0;
+          while (attempt <= hookRetries) {
+            attempt++;
+            const pushResult = await Utils.pushCurrentBranch({
+              verbose: options.verbose,
+            });
+            if (pushResult.success) {
+              console.log(`✅ ${pushResult.message}`);
+              return { success: true, result: pushResult };
+            }
+            if (pushResult.hookError && attempt <= hookRetries) {
+              console.log(`\n⚠️  Git pre-push hook failed during push (attempt ${attempt}/${hookRetries + 1})`);
+              const fixed = await runClaudeToFixGitHook("push", claudePath, maxTurns);
+              logHookErrorToFile(taskKey ?? "unknown", "push", attempt, pushResult.hookError, fixed);
+              if (fixed) {
+                console.log("\n🔄 Retrying push after Claude fixed and amended the commit...");
+                continue;
+              } else {
+                console.log("\n❌ Could not fix git pre-push hook errors automatically");
+                return { success: false, result: pushResult };
+              }
+            } else {
+              if (attempt > hookRetries) {
+                console.log(`\n❌ Max retries (${hookRetries}) exceeded for git hook fixes`);
+              }
+              console.log(`⚠️  ${pushResult.message}`);
+              return { success: false, result: pushResult };
+            }
+          }
+          return { success: false, result: { message: "Max retries exceeded" } };
+        };
+
+        const createPrAndTransition = async (implementationOutput: string, autoReviewRan = false) => {
+          console.log("\n🔀 Creating pull request...");
+          try {
+            const prManager = new PRManager();
+            const branchForPr = await Utils.getCurrentBranch();
+
+            if (!branchForPr) {
+              console.log("⚠️  Could not determine current branch for PR creation");
+              return;
+            }
+            if (await Utils.isProtectedBranch(branchForPr)) {
+              console.error(`\n❌ Cannot create PR from protected branch '${branchForPr}'`);
+              console.error("   This indicates a bug - feature branch was not created properly.");
+              return;
+            }
+
+            const prResult = await prManager.createPullRequest(
+              issue,
+              branchForPr,
+              prTargetBranch,
+              implementationOutput
+            );
+
+            if (prResult.success) {
+              console.log(`✅ Pull request created: ${prResult.url}`);
+
+              if (taskKey && jiraClient && !skipJiraComments) {
+                const projectKey = taskKey.split('-')[0];
+                const prStatus = getPrStatusForProject(projectKey, projectSettings);
+                if (prStatus && prStatus.trim()) {
+                  try {
+                    console.log("\n🔄 Transitioning JIRA status after PR creation...");
+                    await jiraClient.transitionIssue(taskKey, prStatus.trim());
+                  } catch (statusError) {
+                    console.warn(`⚠️  Failed to transition JIRA status: ${(statusError as Error).message}`);
+                    console.log("   PR was created successfully, but status transition failed");
+                  }
+                }
+              } else if (skipJiraComments) {
+                console.log("\n⏭️  Skipping JIRA status transition (--skip-jira-comments)");
+              }
+
+              if (autoReviewRan) {
+                console.log("\n✅ Auto-review was completed before push (see summary file for details)");
+              }
+            } else {
+              console.log(`⚠️  PR creation failed: ${prResult.message}`);
+            }
+          } catch (prError) {
+            console.log(`⚠️  PR creation failed: ${(prError as Error).message}`);
+          }
+        };
+        // --- End shared helpers ---
+
         // Commit changes if git is enabled and we have task details
         if (enableGit && taskKey && taskSummary) {
           console.log("\n📝 Committing changes...");
@@ -2360,148 +2486,27 @@ async function runClaude(
 
                         // Continue with PR creation if requested
                         if (createPr && issue) {
-                          // Validate pre-push hook locally with retry logic
-                          const planHandleLocalHookValidation = async (phase: string) => {
-                            let attempt = 0;
-                            while (attempt <= hookRetries) {
-                              attempt++;
-                              const hookResult = await Utils.runPrePushHookLocally({
-                                verbose: options.verbose,
-                              });
-                              if (hookResult.success) {
-                                if (attempt === 1) {
-                                  console.log(`✅ ${hookResult.message}`);
-                                } else {
-                                  console.log(`✅ Pre-push hook passed after ${attempt} attempt(s)`);
-                                }
-                                return { success: true, result: hookResult };
-                              }
-                              if (hookResult.hookError && attempt <= hookRetries) {
-                                console.log(`\n⚠️  Pre-push hook failed during ${phase} (attempt ${attempt}/${hookRetries + 1})`);
-                                const fixed = await runClaudeToFixGitHook("push", claudePath, maxTurns);
-                                logHookErrorToFile(taskKey, "push-local-validation-plan", attempt, hookResult.hookError, fixed);
-                                if (fixed) {
-                                  console.log("\n🔄 Retrying local hook validation after Claude fixed the issues...");
-                                  continue;
-                                } else {
-                                  console.log("\n❌ Could not fix pre-push hook errors automatically");
-                                  return { success: false, result: hookResult };
-                                }
-                              } else {
-                                if (attempt > hookRetries) {
-                                  console.log(`\n❌ Max retries (${hookRetries}) exceeded for pre-push hook fixes`);
-                                }
-                                console.log(`⚠️  ${hookResult.message}`);
-                                return { success: false, result: hookResult };
-                              }
-                            }
-                            return { success: false, result: { message: "Max retries exceeded" } };
-                          };
-
-                          // Step 1: Validate pre-push hook locally BEFORE pushing
+                          // Validate pre-push hook locally BEFORE pushing
                           console.log("\n🔍 Validating pre-push hook locally (before pushing)...");
-                          const planHookValidation = await planHandleLocalHookValidation("plan implementation validation");
+                          const planHookValidation = await validatePrePushHook("plan implementation validation");
                           if (!planHookValidation.success) {
                             console.log("   Cannot proceed without passing pre-push hook validation");
                             resolve();
                             return;
                           }
 
-                          // Step 2: Push with retry logic
-                          console.log("\n📤 Pushing branch to remote...");
-                          const planHandlePushWithRetry = async () => {
-                            let attempt = 0;
-                            while (attempt <= hookRetries) {
-                              attempt++;
-                              const pushResult = await Utils.pushCurrentBranch({
-                                verbose: options.verbose,
-                              });
-                              if (pushResult.success) {
-                                console.log(`✅ ${pushResult.message}`);
-                                return { success: true, result: pushResult };
-                              }
-                              if (pushResult.hookError && attempt <= hookRetries) {
-                                console.log(`\n⚠️  Git pre-push hook failed during actual push (attempt ${attempt}/${hookRetries + 1})`);
-                                const fixed = await runClaudeToFixGitHook("push", claudePath, maxTurns);
-                                logHookErrorToFile(taskKey, "push-plan", attempt, pushResult.hookError, fixed);
-                                if (fixed) {
-                                  console.log("\n🔄 Retrying push after Claude fixed and amended the commit...");
-                                  continue;
-                                } else {
-                                  console.log("\n❌ Could not fix git pre-push hook errors automatically");
-                                  return { success: false, result: pushResult };
-                                }
-                              } else {
-                                if (attempt > hookRetries) {
-                                  console.log(`\n❌ Max retries (${hookRetries}) exceeded for git hook fixes`);
-                                }
-                                console.log(`⚠️  ${pushResult.message}`);
-                                return { success: false, result: pushResult };
-                              }
-                            }
-                            return { success: false, result: { message: "Max retries exceeded" } };
-                          };
-
-                          const planPushOutcome = await planHandlePushWithRetry();
+                          const planPushOutcome = await pushWithHookRetry();
 
                           if (planPushOutcome.success) {
-                            // Post implementation comment to JIRA if enabled
                             if (jiraClient && !skipJiraComments && retryStdoutOutput.trim()) {
                               try {
-                                await postImplementationComment(
-                                  taskKey,
-                                  retryStdoutOutput,
-                                  taskSummary
-                                );
+                                await postImplementationComment(taskKey, retryStdoutOutput, taskSummary);
                               } catch (commentError) {
                                 console.warn(`⚠️  Failed to post implementation comment: ${commentError}`);
                               }
                             }
 
-                            // Create pull request
-                            console.log("\n🔀 Creating pull request...");
-                            try {
-                              const planPrManager = new PRManager();
-                              const planCurrentBranch = await Utils.getCurrentBranch();
-
-                              if (planCurrentBranch) {
-                                if (await Utils.isProtectedBranch(planCurrentBranch)) {
-                                  console.error(`\n❌ Cannot create PR from protected branch '${planCurrentBranch}'`);
-                                } else {
-                                  const planPrResult = await planPrManager.createPullRequest(
-                                    issue,
-                                    planCurrentBranch,
-                                    prTargetBranch,
-                                    retryStdoutOutput
-                                  );
-
-                                  if (planPrResult.success) {
-                                    console.log(`✅ Pull request created: ${planPrResult.url}`);
-
-                                    // Transition JIRA status if configured
-                                    if (taskKey && jiraClient && !skipJiraComments) {
-                                      const projectKey = taskKey.split('-')[0];
-                                      const prStatus = getPrStatusForProject(projectKey, projectSettings);
-                                      if (prStatus && prStatus.trim()) {
-                                        try {
-                                          console.log("\n🔄 Transitioning JIRA status after PR creation...");
-                                          await jiraClient.transitionIssue(taskKey, prStatus.trim());
-                                        } catch (statusError) {
-                                          console.warn(`⚠️  Failed to transition JIRA status: ${(statusError as Error).message}`);
-                                          console.log("   PR was created successfully, but status transition failed");
-                                        }
-                                      }
-                                    }
-                                  } else {
-                                    console.log(`⚠️  PR creation failed: ${planPrResult.message}`);
-                                  }
-                                }
-                              } else {
-                                console.log("⚠️  Could not determine current branch for PR creation");
-                              }
-                            } catch (prError) {
-                              console.log(`⚠️  PR creation failed: ${(prError as Error).message}`);
-                            }
+                            await createPrAndTransition(retryStdoutOutput);
                           }
                         }
                       } else {
@@ -2534,68 +2539,9 @@ async function runClaude(
 
               // Create pull request if requested
               if (createPr && issue) {
-                // Validate pre-push hook locally with retry logic (fix with Claude if needed)
-                const handleLocalHookValidation = async (phase: string) => {
-                  let attempt = 0;
-
-                  while (attempt <= hookRetries) {
-                    attempt++;
-                    const hookResult = await Utils.runPrePushHookLocally({
-                      verbose: options.verbose,
-                    });
-
-                    if (hookResult.success) {
-                      if (attempt === 1) {
-                        console.log(`✅ ${hookResult.message}`);
-                      } else {
-                        console.log(`✅ Pre-push hook passed after ${attempt} attempt(s)`);
-                      }
-                      return { success: true, result: hookResult };
-                    }
-
-                    // Check if this is a hook error that we can try to fix
-                    if (hookResult.hookError && attempt <= hookRetries) {
-                      console.log(`\n⚠️  Pre-push hook failed during ${phase} (attempt ${attempt}/${hookRetries + 1})`);
-
-                      // Try to fix the hook error with Claude
-                      const fixed = await runClaudeToFixGitHook(
-                        "push",
-                        claudePath,
-                        maxTurns
-                      );
-
-                      // Log the hook error to file
-                      logHookErrorToFile(
-                        taskKey,
-                        "push-local-validation",
-                        attempt,
-                        hookResult.hookError,
-                        fixed
-                      );
-
-                      if (fixed) {
-                        console.log("\n🔄 Retrying local hook validation after Claude fixed the issues...");
-                        continue;
-                      } else {
-                        console.log("\n❌ Could not fix pre-push hook errors automatically");
-                        return { success: false, result: hookResult };
-                      }
-                    } else {
-                      // Not a hook error or out of retries
-                      if (attempt > hookRetries) {
-                        console.log(`\n❌ Max retries (${hookRetries}) exceeded for pre-push hook fixes`);
-                      }
-                      console.log(`⚠️  ${hookResult.message}`);
-                      return { success: false, result: hookResult };
-                    }
-                  }
-
-                  return { success: false, result: { message: "Max retries exceeded" } };
-                };
-
                 // Step 1: Validate pre-push hook locally BEFORE any push
                 console.log("\n🔍 Validating pre-push hook locally (before pushing)...");
-                const initialHookValidation = await handleLocalHookValidation("initial validation");
+                const initialHookValidation = await validatePrePushHook("initial validation");
 
                 if (!initialHookValidation.success) {
                   console.log("   Cannot proceed without passing pre-push hook validation");
@@ -2604,7 +2550,6 @@ async function runClaude(
                 }
 
                 // Step 2: Run auto-review with skipPush if enabled
-                // This allows all improvements to be made locally before pushing
                 const currentBranch = await Utils.getCurrentBranch();
                 let autoReviewRan = false;
 
@@ -2612,7 +2557,6 @@ async function runClaude(
                   try {
                     console.log("\n🔄 Running auto-review loop (without pushing)...");
 
-                    // Calculate task output directory
                     const baseOutputDir =
                       process.env.CLAUDE_INTERN_OUTPUT_DIR || "/tmp/claude-intern-tasks";
                     const taskDir = taskKey
@@ -2620,8 +2564,8 @@ async function runClaude(
                       : join(baseOutputDir, `auto-review-${Date.now()}`);
 
                     const autoReviewResult = await runAutoReviewLoop({
-                      repository: "local/repo", // Placeholder - not used when skipPush is true
-                      prNumber: 0, // Placeholder - PR doesn't exist yet
+                      repository: "local/repo",
+                      prNumber: 0,
                       prBranch: currentBranch,
                       baseBranch: prTargetBranch,
                       claudePath,
@@ -2629,19 +2573,18 @@ async function runClaude(
                       minPriority: 'medium',
                       workingDir: process.cwd(),
                       outputDir: taskDir,
-                      skipPush: true, // Don't push during auto-review iterations
+                      skipPush: true,
                     });
 
-                    // Save final summary
                     const summaryPath = join(taskDir, 'auto-review-summary.json');
                     writeFileSync(summaryPath, JSON.stringify(autoReviewResult, null, 2));
                     console.log(`\n📄 Auto-review summary saved to: ${summaryPath}`);
 
                     autoReviewRan = true;
 
-                    // Step 3: After auto-review, validate hooks again (auto-review changes may have broken things)
+                    // Step 3: After auto-review, validate hooks again
                     console.log("\n🔍 Re-validating pre-push hook after auto-review improvements...");
-                    const postAutoReviewValidation = await handleLocalHookValidation("post auto-review validation");
+                    const postAutoReviewValidation = await validatePrePushHook("post auto-review validation");
 
                     if (!postAutoReviewValidation.success) {
                       console.log("   Cannot proceed - auto-review changes failed pre-push hook validation");
@@ -2656,173 +2599,23 @@ async function runClaude(
                   }
                 }
 
-                // Step 4: Now do the actual push (hooks already validated, should succeed)
-                console.log("\n📤 Pushing branch to remote...");
-
-                // Push with retry logic (hooks should pass, but network issues can occur)
-                const handlePushWithRetry = async () => {
-                  let attempt = 0;
-
-                  while (attempt <= hookRetries) {
-                    attempt++;
-                    const pushResult = await Utils.pushCurrentBranch({
-                      verbose: options.verbose,
-                    });
-
-                    if (pushResult.success) {
-                      console.log(`✅ ${pushResult.message}`);
-                      return { success: true, result: pushResult };
-                    }
-
-                    // Check if this is a git hook error that we can try to fix
-                    if (pushResult.hookError && attempt <= hookRetries) {
-                      console.log(`\n⚠️  Git pre-push hook failed during actual push (attempt ${attempt}/${hookRetries + 1})`);
-
-                      // Try to fix the hook error with Claude
-                      const fixed = await runClaudeToFixGitHook(
-                        "push",
-                        claudePath,
-                        maxTurns
-                      );
-
-                      // Log the hook error to file
-                      logHookErrorToFile(
-                        taskKey,
-                        "push",
-                        attempt,
-                        pushResult.hookError,
-                        fixed
-                      );
-
-                      if (fixed) {
-                        console.log("\n🔄 Retrying push after Claude fixed and amended the commit...");
-                        continue;
-                      } else {
-                        console.log("\n❌ Could not fix git pre-push hook errors automatically");
-                        return { success: false, result: pushResult };
-                      }
-                    } else {
-                      // Not a hook error or out of retries
-                      if (attempt > hookRetries) {
-                        console.log(`\n❌ Max retries (${hookRetries}) exceeded for git hook fixes`);
-                      }
-                      console.log(`⚠️  ${pushResult.message}`);
-                      return { success: false, result: pushResult };
-                    }
-                  }
-
-                  return { success: false, result: { message: "Max retries exceeded" } };
-                };
-
-                const pushOutcome = await handlePushWithRetry();
+                // Step 4: Push with hook retry
+                const pushOutcome = await pushWithHookRetry();
 
                 if (pushOutcome.success) {
-                  // Post implementation summary to JIRA after successful push
                   if (taskKey && stdoutOutput.trim() && !skipJiraComments) {
                     try {
                       console.log("\n💬 Posting implementation summary to JIRA...");
-                      await postImplementationComment(
-                        taskKey,
-                        stdoutOutput,
-                        taskSummary
-                      );
+                      await postImplementationComment(taskKey, stdoutOutput, taskSummary);
                     } catch (commentError) {
-                      console.warn(
-                        `⚠️  Failed to post implementation comment to JIRA: ${commentError}`
-                      );
-                      console.log(
-                        "   Push succeeded, but JIRA comment failed"
-                      );
+                      console.warn(`⚠️  Failed to post implementation comment to JIRA: ${commentError}`);
+                      console.log("   Push succeeded, but JIRA comment failed");
                     }
                   } else if (skipJiraComments && taskKey) {
                     console.log("\n⏭️  Skipping JIRA comment posting (--skip-jira-comments)");
                   }
 
-                  console.log("\n🔀 Creating pull request...");
-                  try {
-                    const prManager = new PRManager();
-                    // Note: currentBranch was already fetched earlier for auto-review
-
-                    if (currentBranch) {
-                      // Safety check: prevent creating PRs from protected branches
-                      if (await Utils.isProtectedBranch(currentBranch)) {
-                        console.error(
-                          `\n❌ Cannot create PR from protected branch '${currentBranch}'`
-                        );
-                        console.error(
-                          "   This indicates a bug - feature branch was not created properly."
-                        );
-                        console.error(
-                          "   Please create a feature branch manually and try again."
-                        );
-                        resolve();
-                        return;
-                      }
-
-                      const prResult = await prManager.createPullRequest(
-                        issue,
-                        currentBranch,
-                        prTargetBranch,
-                        stdoutOutput // Use Claude's output as implementation summary
-                      );
-
-                      if (prResult.success) {
-                        console.log(
-                          `✅ Pull request created: ${prResult.url}`
-                        );
-
-                        // Transition JIRA status if configured
-                        if (taskKey && jiraClient && !skipJiraComments) {
-                          // Extract project key from task key (e.g., "PROJ-123" -> "PROJ")
-                          const projectKey = taskKey.split('-')[0];
-                          const prStatus = getPrStatusForProject(projectKey, projectSettings);
-
-                          if (prStatus && prStatus.trim()) {
-                            try {
-                              console.log(
-                                "\n🔄 Transitioning JIRA status after PR creation..."
-                              );
-                              await jiraClient.transitionIssue(
-                                taskKey,
-                                prStatus.trim()
-                              );
-                            } catch (statusError) {
-                              console.warn(
-                                `⚠️  Failed to transition JIRA status: ${
-                                  (statusError as Error).message
-                                }`
-                              );
-                              console.log(
-                                "   PR was created successfully, but status transition failed"
-                              );
-                            }
-                          }
-                        } else if (skipJiraComments) {
-                          console.log(
-                            "\n⏭️  Skipping JIRA status transition (--skip-jira-comments)"
-                          );
-                        }
-
-                        // Note: Auto-review loop (if enabled) was already run before pushing
-                        // to minimize CI impact. The code was validated locally first.
-                        if (autoReviewRan) {
-                          console.log("\n✅ Auto-review was completed before push (see summary file for details)");
-                        }
-                      } else {
-                        console.log(
-                          `⚠️  PR creation failed: ${prResult.message}`
-                        );
-                      }
-                    } else {
-                      console.log(
-                        "⚠️  Could not determine current branch for PR creation"
-                      );
-                    }
-                  } catch (prError) {
-                    console.log(
-                      `⚠️  PR creation failed: ${(prError as Error).message}`
-                    );
-                  }
+                  await createPrAndTransition(stdoutOutput, autoReviewRan);
                 } else {
                   console.log(
                     "   Cannot create PR without pushing branch to remote"
