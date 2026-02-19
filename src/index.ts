@@ -2457,6 +2457,51 @@ async function runClaude(
                                 console.warn(`⚠️  Failed to post implementation comment: ${commentError}`);
                               }
                             }
+
+                            // Create pull request
+                            console.log("\n🔀 Creating pull request...");
+                            try {
+                              const planPrManager = new PRManager();
+                              const planCurrentBranch = await Utils.getCurrentBranch();
+
+                              if (planCurrentBranch) {
+                                if (await Utils.isProtectedBranch(planCurrentBranch)) {
+                                  console.error(`\n❌ Cannot create PR from protected branch '${planCurrentBranch}'`);
+                                } else {
+                                  const planPrResult = await planPrManager.createPullRequest(
+                                    issue,
+                                    planCurrentBranch,
+                                    prTargetBranch,
+                                    retryStdoutOutput
+                                  );
+
+                                  if (planPrResult.success) {
+                                    console.log(`✅ Pull request created: ${planPrResult.url}`);
+
+                                    // Transition JIRA status if configured
+                                    if (taskKey && jiraClient && !skipJiraComments) {
+                                      const projectKey = taskKey.split('-')[0];
+                                      const prStatus = getPrStatusForProject(projectKey, projectSettings);
+                                      if (prStatus && prStatus.trim()) {
+                                        try {
+                                          console.log("\n🔄 Transitioning JIRA status after PR creation...");
+                                          await jiraClient.transitionIssue(taskKey, prStatus.trim());
+                                        } catch (statusError) {
+                                          console.warn(`⚠️  Failed to transition JIRA status: ${(statusError as Error).message}`);
+                                          console.log("   PR was created successfully, but status transition failed");
+                                        }
+                                      }
+                                    }
+                                  } else {
+                                    console.log(`⚠️  PR creation failed: ${planPrResult.message}`);
+                                  }
+                                }
+                              } else {
+                                console.log("⚠️  Could not determine current branch for PR creation");
+                              }
+                            } catch (prError) {
+                              console.log(`⚠️  PR creation failed: ${(prError as Error).message}`);
+                            }
                           }
                         }
                       } else {
