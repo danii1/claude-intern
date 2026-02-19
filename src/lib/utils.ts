@@ -1463,18 +1463,47 @@ export class Utils {
 
       if (hasOrigin) {
         // With origin - try to create worktree tracking origin branch
-        if (localBranchCheck.success) {
-          // Local branch exists - delete it first to avoid conflicts
-          await Utils.executeGitCommand(
+        let branchExistsLocally = localBranchCheck.success;
+
+        if (branchExistsLocally) {
+          // Local branch exists - try to delete it to avoid conflicts with -b flag
+          const deleteResult = await Utils.executeGitCommand(
             ["branch", "-D", branch],
             { verbose: false }
           );
+          if (deleteResult.success) {
+            branchExistsLocally = false;
+          } else if (verbose) {
+            console.log(`   Branch ${branch} could not be deleted (likely checked out elsewhere), will reuse it`);
+          }
         }
 
-        createResult = await Utils.executeGitCommand(
-          ["worktree", "add", "--track", "-b", branch, worktreePath, `origin/${branch}`],
-          { verbose }
-        );
+        if (branchExistsLocally) {
+          // Branch exists and can't be deleted (e.g. checked out in main worktree)
+          // Use --force to allow checkout even if branch is checked out elsewhere
+          createResult = await Utils.executeGitCommand(
+            ["worktree", "add", "--force", worktreePath, branch],
+            { verbose }
+          );
+
+          if (createResult.success) {
+            // Reset to origin to ensure we have the latest
+            await Utils.executeGitCommand(
+              ["reset", "--hard", `origin/${branch}`],
+              { verbose: false, cwd: worktreePath }
+            );
+            // Set up tracking
+            await Utils.executeGitCommand(
+              ["branch", `--set-upstream-to=origin/${branch}`, branch],
+              { verbose: false, cwd: worktreePath }
+            );
+          }
+        } else {
+          createResult = await Utils.executeGitCommand(
+            ["worktree", "add", "--track", "-b", branch, worktreePath, `origin/${branch}`],
+            { verbose }
+          );
+        }
       } else {
         // No origin - use local branch
         createResult = await Utils.executeGitCommand(
@@ -1508,6 +1537,29 @@ export class Utils {
             createResult = await Utils.executeGitCommand(
               ["worktree", "add", worktreePath, branch],
               { verbose }
+            );
+          }
+        } else if (errorMsg.includes("already exists") || errorMsg.includes("already checked out") || errorMsg.includes("already used by worktree")) {
+          // Branch exists locally and couldn't be deleted (checked out or used by another worktree)
+          // Use --force to allow checkout even if branch is in use elsewhere
+          if (verbose) {
+            console.log(`   Branch already exists or checked out elsewhere, creating worktree with --force...`);
+          }
+
+          createResult = await Utils.executeGitCommand(
+            ["worktree", "add", "--force", worktreePath, branch],
+            { verbose }
+          );
+
+          if (createResult.success && hasOrigin) {
+            // Reset to origin to ensure we have the latest
+            await Utils.executeGitCommand(
+              ["reset", "--hard", `origin/${branch}`],
+              { verbose: false, cwd: worktreePath }
+            );
+            await Utils.executeGitCommand(
+              ["branch", `--set-upstream-to=origin/${branch}`, branch],
+              { verbose: false, cwd: worktreePath }
             );
           }
         }

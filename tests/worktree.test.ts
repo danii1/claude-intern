@@ -203,3 +203,185 @@ describe("Git Worktree Utilities - Single Reusable Worktree", () => {
     expect(branch1Result2.output).toContain(branch1);
   });
 });
+
+describe("Git Worktree with Origin Remote", () => {
+  let testDir: string;
+  let repoDir: string;
+  let bareDir: string;
+  let originalCwd: string;
+
+  beforeEach(async () => {
+    originalCwd = process.cwd();
+
+    testDir = join(
+      tmpdir(),
+      `worktree-origin-test-${Date.now()}-${Math.random().toString(36).substring(7)}`
+    );
+    mkdirSync(testDir, { recursive: true });
+
+    // Create bare repo to serve as origin
+    bareDir = join(testDir, "bare-origin");
+    mkdirSync(bareDir, { recursive: true });
+    execSync("git init --bare", { cwd: bareDir });
+
+    // Create test repo
+    repoDir = join(testDir, "test-repo");
+    mkdirSync(repoDir, { recursive: true });
+    process.chdir(repoDir);
+
+    execSync("git init", { cwd: repoDir });
+    execSync("git config user.email 'test@test.com'", { cwd: repoDir });
+    execSync("git config user.name 'Test User'", { cwd: repoDir });
+
+    // Create initial commit and push to origin
+    writeFileSync(join(repoDir, "README.md"), "# Test Repo\n", "utf8");
+    execSync("git add .", { cwd: repoDir });
+    execSync("git commit -m 'Initial commit'", { cwd: repoDir });
+    execSync(`git remote add origin ${bareDir}`, { cwd: repoDir });
+    execSync("git push -u origin master", { cwd: repoDir });
+
+    // Create feature branch and push
+    execSync("git checkout -b feature/test-branch", { cwd: repoDir });
+    writeFileSync(join(repoDir, "feature.txt"), "Feature content\n", "utf8");
+    execSync("git add .", { cwd: repoDir });
+    execSync("git commit -m 'Add feature'", { cwd: repoDir });
+    execSync("git push -u origin feature/test-branch", { cwd: repoDir });
+
+    // Create another feature branch and push
+    execSync("git checkout master", { cwd: repoDir });
+    execSync("git checkout -b feature/another-branch", { cwd: repoDir });
+    writeFileSync(join(repoDir, "another.txt"), "Another content\n", "utf8");
+    execSync("git add .", { cwd: repoDir });
+    execSync("git commit -m 'Add another'", { cwd: repoDir });
+    execSync("git push -u origin feature/another-branch", { cwd: repoDir });
+
+    // Return to master
+    execSync("git checkout master", { cwd: repoDir });
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+
+    // Clean up worktree
+    const worktreePath = Utils.getReviewWorktreePath();
+    try {
+      execSync(`git worktree remove --force "${worktreePath}"`, { cwd: repoDir });
+    } catch {}
+    try {
+      execSync("git worktree prune", { cwd: repoDir });
+    } catch {}
+    try {
+      if (existsSync(worktreePath)) {
+        rmSync(worktreePath, { recursive: true, force: true });
+      }
+    } catch {}
+
+    // Clean up test directory
+    try {
+      if (existsSync(testDir)) {
+        rmSync(testDir, { recursive: true, force: true });
+      }
+    } catch {}
+  });
+
+  test("should create worktree tracking origin branch", async () => {
+    const result = await Utils.prepareReviewWorktree(
+      "feature/test-branch",
+      { verbose: false }
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.path).toBeDefined();
+    expect(existsSync(result.path!)).toBe(true);
+    expect(existsSync(join(result.path!, "feature.txt"))).toBe(true);
+
+    // Verify the branch tracks origin
+    const trackResult = await Utils.executeGitCommand(
+      ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+      { verbose: false, cwd: result.path! }
+    );
+    expect(trackResult.success).toBe(true);
+    expect(trackResult.output).toContain("origin/feature/test-branch");
+  });
+
+  test("should create worktree when branch is checked out in main (with origin)", async () => {
+    // Check out the feature branch in main repo (simulates running task)
+    execSync("git checkout feature/test-branch", { cwd: repoDir });
+
+    // Try to create worktree for the same branch
+    const result = await Utils.prepareReviewWorktree(
+      "feature/test-branch",
+      { verbose: false }
+    );
+
+    // Should succeed via --force fallback
+    expect(result.success).toBe(true);
+    expect(result.path).toBeDefined();
+    expect(existsSync(result.path!)).toBe(true);
+    expect(existsSync(join(result.path!, "feature.txt"))).toBe(true);
+  });
+
+  test("should reset worktree to latest origin when branch existed locally", async () => {
+    // Make a local-only commit on the feature branch
+    execSync("git checkout feature/test-branch", { cwd: repoDir });
+    writeFileSync(join(repoDir, "local-only.txt"), "Not pushed\n", "utf8");
+    execSync("git add .", { cwd: repoDir });
+    execSync("git commit -m 'Local only commit'", { cwd: repoDir });
+    execSync("git checkout master", { cwd: repoDir });
+
+    // Create worktree - should get origin version (without local-only commit)
+    const result = await Utils.prepareReviewWorktree(
+      "feature/test-branch",
+      { verbose: false }
+    );
+
+    expect(result.success).toBe(true);
+    expect(existsSync(join(result.path!, "feature.txt"))).toBe(true);
+    // The local-only file should NOT be present since we reset to origin
+    expect(existsSync(join(result.path!, "local-only.txt"))).toBe(false);
+  });
+
+  test("should recover from externally removed worktree (with origin)", async () => {
+    const worktreePath = Utils.getReviewWorktreePath();
+
+    // Create worktree
+    const result1 = await Utils.prepareReviewWorktree(
+      "feature/test-branch",
+      { verbose: false }
+    );
+    expect(result1.success).toBe(true);
+
+    // Simulate external removal
+    rmSync(worktreePath, { recursive: true, force: true });
+
+    // Should recover
+    const result2 = await Utils.prepareReviewWorktree(
+      "feature/test-branch",
+      { verbose: false }
+    );
+
+    expect(result2.success).toBe(true);
+    expect(existsSync(result2.path!)).toBe(true);
+    expect(existsSync(join(result2.path!, "feature.txt"))).toBe(true);
+  });
+
+  test("should switch branches in worktree with origin", async () => {
+    // Create worktree for first branch
+    const result1 = await Utils.prepareReviewWorktree(
+      "feature/test-branch",
+      { verbose: false }
+    );
+    expect(result1.success).toBe(true);
+    expect(existsSync(join(result1.path!, "feature.txt"))).toBe(true);
+
+    // Switch to another branch
+    const result2 = await Utils.prepareReviewWorktree(
+      "feature/another-branch",
+      { verbose: false }
+    );
+    expect(result2.success).toBe(true);
+    expect(result2.path).toBe(result1.path);
+    expect(existsSync(join(result2.path!, "another.txt"))).toBe(true);
+    expect(existsSync(join(result2.path!, "feature.txt"))).toBe(false);
+  });
+});
