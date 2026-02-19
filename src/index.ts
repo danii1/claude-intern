@@ -2360,16 +2360,91 @@ async function runClaude(
 
                         // Continue with PR creation if requested
                         if (createPr && issue) {
-                          // Push and create PR (simplified - using existing logic pattern)
+                          // Validate pre-push hook locally with retry logic
+                          const planHandleLocalHookValidation = async (phase: string) => {
+                            let attempt = 0;
+                            while (attempt <= hookRetries) {
+                              attempt++;
+                              const hookResult = await Utils.runPrePushHookLocally({
+                                verbose: options.verbose,
+                              });
+                              if (hookResult.success) {
+                                if (attempt === 1) {
+                                  console.log(`✅ ${hookResult.message}`);
+                                } else {
+                                  console.log(`✅ Pre-push hook passed after ${attempt} attempt(s)`);
+                                }
+                                return { success: true, result: hookResult };
+                              }
+                              if (hookResult.hookError && attempt <= hookRetries) {
+                                console.log(`\n⚠️  Pre-push hook failed during ${phase} (attempt ${attempt}/${hookRetries + 1})`);
+                                const fixed = await runClaudeToFixGitHook("push", claudePath, maxTurns);
+                                logHookErrorToFile(taskKey, "push-local-validation-plan", attempt, hookResult.hookError, fixed);
+                                if (fixed) {
+                                  console.log("\n🔄 Retrying local hook validation after Claude fixed the issues...");
+                                  continue;
+                                } else {
+                                  console.log("\n❌ Could not fix pre-push hook errors automatically");
+                                  return { success: false, result: hookResult };
+                                }
+                              } else {
+                                if (attempt > hookRetries) {
+                                  console.log(`\n❌ Max retries (${hookRetries}) exceeded for pre-push hook fixes`);
+                                }
+                                console.log(`⚠️  ${hookResult.message}`);
+                                return { success: false, result: hookResult };
+                              }
+                            }
+                            return { success: false, result: { message: "Max retries exceeded" } };
+                          };
+
+                          // Step 1: Validate pre-push hook locally BEFORE pushing
+                          console.log("\n🔍 Validating pre-push hook locally (before pushing)...");
+                          const planHookValidation = await planHandleLocalHookValidation("plan implementation validation");
+                          if (!planHookValidation.success) {
+                            console.log("   Cannot proceed without passing pre-push hook validation");
+                            resolve();
+                            return;
+                          }
+
+                          // Step 2: Push with retry logic
                           console.log("\n📤 Pushing branch to remote...");
-                          const pushResult = await Utils.executeGitCommand(
-                            ["push", "-u", "origin", "HEAD"],
-                            { verbose: options.verbose }
-                          );
+                          const planHandlePushWithRetry = async () => {
+                            let attempt = 0;
+                            while (attempt <= hookRetries) {
+                              attempt++;
+                              const pushResult = await Utils.pushCurrentBranch({
+                                verbose: options.verbose,
+                              });
+                              if (pushResult.success) {
+                                console.log(`✅ ${pushResult.message}`);
+                                return { success: true, result: pushResult };
+                              }
+                              if (pushResult.hookError && attempt <= hookRetries) {
+                                console.log(`\n⚠️  Git pre-push hook failed during actual push (attempt ${attempt}/${hookRetries + 1})`);
+                                const fixed = await runClaudeToFixGitHook("push", claudePath, maxTurns);
+                                logHookErrorToFile(taskKey, "push-plan", attempt, pushResult.hookError, fixed);
+                                if (fixed) {
+                                  console.log("\n🔄 Retrying push after Claude fixed and amended the commit...");
+                                  continue;
+                                } else {
+                                  console.log("\n❌ Could not fix git pre-push hook errors automatically");
+                                  return { success: false, result: pushResult };
+                                }
+                              } else {
+                                if (attempt > hookRetries) {
+                                  console.log(`\n❌ Max retries (${hookRetries}) exceeded for git hook fixes`);
+                                }
+                                console.log(`⚠️  ${pushResult.message}`);
+                                return { success: false, result: pushResult };
+                              }
+                            }
+                            return { success: false, result: { message: "Max retries exceeded" } };
+                          };
 
-                          if (pushResult.success) {
-                            console.log("✅ Branch pushed successfully");
+                          const planPushOutcome = await planHandlePushWithRetry();
 
+                          if (planPushOutcome.success) {
                             // Post implementation comment to JIRA if enabled
                             if (jiraClient && !skipJiraComments && retryStdoutOutput.trim()) {
                               try {
@@ -2382,8 +2457,6 @@ async function runClaude(
                                 console.warn(`⚠️  Failed to post implementation comment: ${commentError}`);
                               }
                             }
-                          } else {
-                            console.log(`⚠️  Failed to push: ${pushResult.error}`);
                           }
                         }
                       } else {
