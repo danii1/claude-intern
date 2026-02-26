@@ -1239,6 +1239,8 @@ async function runClarityCheck(
     // Read the clarity assessment content
     const clarityContent = readFileSync(clarityFile, "utf8");
 
+    const timeoutMinutes = parseInt(process.env.CLAUDE_TIMEOUT_MINUTES || "60", 10);
+
     console.log("🔍 Running feasibility assessment with Claude...");
     console.log(
       `   Command: ${claudePath} -p --dangerously-skip-permissions --max-turns 10`
@@ -1247,6 +1249,7 @@ async function runClarityCheck(
 
     let stdoutOutput = "";
     let stderrOutput = "";
+    let timedOut = false;
 
     // Spawn Claude process for clarity check
     const claude: ChildProcess = spawn(
@@ -1256,6 +1259,17 @@ async function runClarityCheck(
         stdio: ["pipe", "pipe", "pipe"],
       }
     );
+
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      console.error(`\n⏰ Claude process timed out after ${timeoutMinutes} minutes, killing...`);
+      claude.kill("SIGTERM");
+      setTimeout(() => {
+        if (!claude.killed) {
+          claude.kill("SIGKILL");
+        }
+      }, 10_000);
+    }, timeoutMinutes * 60 * 1000);
 
     // Capture stdout for parsing JSON response
     if (claude.stdout) {
@@ -1273,6 +1287,7 @@ async function runClarityCheck(
 
     // Handle errors
     claude.on("error", (error: NodeJS.ErrnoException) => {
+      clearTimeout(timeout);
       if (error.code === "ENOENT") {
         reject(
           new Error(
@@ -1288,6 +1303,11 @@ async function runClarityCheck(
 
     // Handle process exit
     claude.on("close", async (code: number | null) => {
+      clearTimeout(timeout);
+      if (timedOut) {
+        reject(new Error(`Claude clarity check timed out after ${timeoutMinutes} minutes`));
+        return;
+      }
       if (code === 0) {
         try {
           // Parse the JSON response from Claude
@@ -1960,11 +1980,14 @@ async function runClaude(
     // Read the task content
     const taskContent = readFileSync(taskFile, "utf8");
 
+    const timeoutMinutes = parseInt(process.env.CLAUDE_TIMEOUT_MINUTES || "60", 10);
+
     console.log("🚀 Launching Claude...");
     console.log(
       `   Command: ${claudePath} -p --dangerously-skip-permissions --max-turns ${maxTurns} --verbose`
     );
     console.log(`   Input: ${taskFile}`);
+    console.log(`   Timeout: ${timeoutMinutes} minutes`);
     console.log(
       "   Output: All Claude output will be displayed below in real-time"
     );
@@ -1973,12 +1996,9 @@ async function runClaude(
     // Capture stderr to detect max turns error and stdout for JIRA comment
     let stderrOutput = "";
     let stdoutOutput = "";
+    let timedOut = false;
 
     // Spawn Claude process with enhanced permissions and max turns
-    // stdio configuration:
-    // - stdin: 'pipe' (we write task content to it)
-    // - stdout: 'pipe' (we capture it for JIRA comment while also showing to user)
-    // - stderr: 'pipe' (we capture it for error detection while also showing to user)
     const claude: ChildProcess = spawn(
       claudePath,
       [
@@ -1992,12 +2012,22 @@ async function runClaude(
       }
     );
 
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      console.error(`\n⏰ Claude process timed out after ${timeoutMinutes} minutes, killing...`);
+      claude.kill("SIGTERM");
+      setTimeout(() => {
+        if (!claude.killed) {
+          claude.kill("SIGKILL");
+        }
+      }, 10_000);
+    }, timeoutMinutes * 60 * 1000);
+
     // Capture and display stdout output
     if (claude.stdout) {
       claude.stdout.on("data", (data: Buffer) => {
         const output = data.toString();
         stdoutOutput += output;
-        // Immediately write stdout output to user (no buffering)
         process.stdout.write(output);
       });
     }
@@ -2007,13 +2037,13 @@ async function runClaude(
       claude.stderr.on("data", (data: Buffer) => {
         const output = data.toString();
         stderrOutput += output;
-        // Immediately write stderr output to user (no buffering)
         process.stderr.write(output);
       });
     }
 
     // Handle errors
     claude.on("error", (error: NodeJS.ErrnoException) => {
+      clearTimeout(timeout);
       if (error.code === "ENOENT") {
         reject(
           new Error(
@@ -2027,7 +2057,14 @@ async function runClaude(
 
     // Handle process exit
     claude.on("close", async (code: number | null) => {
+      clearTimeout(timeout);
       console.log("\n" + "=".repeat(60));
+
+      if (timedOut) {
+        console.log(`⏰ Claude timed out after ${timeoutMinutes} minutes`);
+        reject(new Error(`Claude timed out after ${timeoutMinutes} minutes`));
+        return;
+      }
 
       // Check for max turns error in stderr output
       const maxTurnsReached =

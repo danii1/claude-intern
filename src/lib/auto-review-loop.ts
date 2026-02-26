@@ -289,6 +289,8 @@ function parseReviewFeedback(claudeOutput: string): ReviewFeedback {
  */
 async function runClaude(prompt: string, workingDir: string, claudePath: string): Promise<string> {
   return new Promise((resolve, reject) => {
+    const timeoutMinutes = parseInt(process.env.CLAUDE_TIMEOUT_MINUTES || '60', 10);
+
     const claudeProcess = spawn(claudePath, ['-p', '--dangerously-skip-permissions', '--max-turns', '500'], {
       cwd: workingDir,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -296,6 +298,18 @@ async function runClaude(prompt: string, workingDir: string, claudePath: string)
 
     let stdout = '';
     let stderr = '';
+    let timedOut = false;
+
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      console.error(`\n⏰ Claude process timed out after ${timeoutMinutes} minutes, killing...`);
+      claudeProcess.kill('SIGTERM');
+      setTimeout(() => {
+        if (!claudeProcess.killed) {
+          claudeProcess.kill('SIGKILL');
+        }
+      }, 10_000);
+    }, timeoutMinutes * 60 * 1000);
 
     claudeProcess.stdout.on('data', (data) => {
       stdout += data.toString();
@@ -306,7 +320,10 @@ async function runClaude(prompt: string, workingDir: string, claudePath: string)
     });
 
     claudeProcess.on('close', (code) => {
-      if (code !== 0) {
+      clearTimeout(timeout);
+      if (timedOut) {
+        reject(new Error(`Claude timed out after ${timeoutMinutes} minutes`));
+      } else if (code !== 0) {
         reject(new Error(`Claude exited with code ${code}: ${stderr}`));
       } else {
         resolve(stdout);
@@ -314,6 +331,7 @@ async function runClaude(prompt: string, workingDir: string, claudePath: string)
     });
 
     claudeProcess.on('error', (error) => {
+      clearTimeout(timeout);
       reject(new Error(`Failed to spawn Claude: ${error}`));
     });
 

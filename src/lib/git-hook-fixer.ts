@@ -77,8 +77,10 @@ The git ${hookType} operation has failed, likely due to pre-${hookType} hooks ch
 ${hookType === "push" ? "- Make sure to amend the commit (git commit --amend --no-edit) so the fixes are included in the push" : ""}
 `;
 
+    const timeoutMinutes = parseInt(process.env.CLAUDE_TIMEOUT_MINUTES || "60", 10);
     let stdoutOutput = "";
     let stderrOutput = "";
+    let timedOut = false;
 
     // Spawn Claude process to fix the issues
     const claude: ChildProcess = spawn(
@@ -94,6 +96,17 @@ ${hookType === "push" ? "- Make sure to amend the commit (git commit --amend --n
         cwd: cwd || process.cwd(),
       }
     );
+
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      console.error(`\n⏰ Claude process timed out after ${timeoutMinutes} minutes, killing...`);
+      claude.kill("SIGTERM");
+      setTimeout(() => {
+        if (!claude.killed) {
+          claude.kill("SIGKILL");
+        }
+      }, 10_000);
+    }, timeoutMinutes * 60 * 1000);
 
     // Capture stdout
     if (claude.stdout) {
@@ -114,11 +127,18 @@ ${hookType === "push" ? "- Make sure to amend the commit (git commit --amend --n
     }
 
     claude.on("error", (error: NodeJS.ErrnoException) => {
+      clearTimeout(timeout);
       console.error(`❌ Failed to run Claude for git hook fix: ${error.message}`);
       resolve(false);
     });
 
     claude.on("close", async (code: number | null) => {
+      clearTimeout(timeout);
+      if (timedOut) {
+        console.error(`❌ Claude timed out after ${timeoutMinutes} minutes while fixing git hook`);
+        resolve(false);
+        return;
+      }
       if (code === 0) {
         console.log("\n🔍 Claude completed - verifying the fix actually worked...");
 

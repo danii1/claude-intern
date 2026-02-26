@@ -105,11 +105,15 @@ async function runClaude(
     // Use high default like regular development (500 turns)
     const maxTurns = parseInt(process.env.CLAUDE_MAX_TURNS || "500", 10);
 
+    const timeoutMinutes = parseInt(process.env.CLAUDE_TIMEOUT_MINUTES || "60", 10);
+
     if (verbose) {
       console.log(`   Command: ${claudePath} -p --dangerously-skip-permissions --max-turns ${maxTurns}`);
+      console.log(`   Timeout: ${timeoutMinutes} minutes`);
     }
 
     let output = "";
+    let timedOut = false;
 
     const claude: ChildProcess = spawn(
       claudePath,
@@ -119,6 +123,17 @@ async function runClaude(
         stdio: ["pipe", "pipe", "pipe"],
       }
     );
+
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      console.error(`\n⏰ Claude process timed out after ${timeoutMinutes} minutes, killing...`);
+      claude.kill("SIGTERM");
+      setTimeout(() => {
+        if (!claude.killed) {
+          claude.kill("SIGKILL");
+        }
+      }, 10_000);
+    }, timeoutMinutes * 60 * 1000);
 
     if (claude.stdout) {
       claude.stdout.on("data", (data: Buffer) => {
@@ -137,6 +152,7 @@ async function runClaude(
     }
 
     claude.on("error", (error: NodeJS.ErrnoException) => {
+      clearTimeout(timeout);
       resolve({
         success: false,
         output: `Failed to run Claude: ${error.message}`,
@@ -144,12 +160,13 @@ async function runClaude(
     });
 
     claude.on("close", (code: number | null) => {
+      clearTimeout(timeout);
       // Check if Claude hit max turns
       const maxTurnsReached = output.includes("Reached max turns");
 
       resolve({
-        success: code === 0 && !maxTurnsReached,
-        output,
+        success: code === 0 && !maxTurnsReached && !timedOut,
+        output: timedOut ? output + `\n\nTimed out after ${timeoutMinutes} minutes` : output,
         maxTurnsReached,
       });
     });

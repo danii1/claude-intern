@@ -824,10 +824,14 @@ async function runClaudeForReview(
     const claudePath = process.env.CLAUDE_CLI_PATH || "claude";
     const maxTurns = parseInt(process.env.CLAUDE_MAX_TURNS || "500", 10);
 
+    const timeoutMinutes = parseInt(process.env.CLAUDE_TIMEOUT_MINUTES || "60", 10);
+
     console.log(`   Command: ${claudePath} -p --dangerously-skip-permissions --max-turns ${maxTurns}`);
+    console.log(`   Timeout: ${timeoutMinutes} minutes`);
 
     let stdoutOutput = "";
     let stderrOutput = "";
+    let timedOut = false;
 
     const claude: ChildProcess = spawn(
       claudePath,
@@ -837,6 +841,18 @@ async function runClaudeForReview(
         stdio: ["pipe", "pipe", "pipe"],
       }
     );
+
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      console.error(`\n⏰ Claude process timed out after ${timeoutMinutes} minutes, killing...`);
+      claude.kill("SIGTERM");
+      // Force kill after 10 seconds if SIGTERM doesn't work
+      setTimeout(() => {
+        if (!claude.killed) {
+          claude.kill("SIGKILL");
+        }
+      }, 10_000);
+    }, timeoutMinutes * 60 * 1000);
 
     if (claude.stdout) {
       claude.stdout.on("data", (data: Buffer) => {
@@ -855,6 +871,7 @@ async function runClaudeForReview(
     }
 
     claude.on("error", (error: NodeJS.ErrnoException) => {
+      clearTimeout(timeout);
       resolve({
         success: false,
         message: `Failed to run Claude: ${error.message}`,
@@ -862,7 +879,14 @@ async function runClaudeForReview(
     });
 
     claude.on("close", (code: number | null) => {
-      if (code === 0) {
+      clearTimeout(timeout);
+      if (timedOut) {
+        resolve({
+          success: false,
+          message: `Claude timed out after ${timeoutMinutes} minutes`,
+          output: stdoutOutput,
+        });
+      } else if (code === 0) {
         resolve({
           success: true,
           message: "Claude completed successfully",
