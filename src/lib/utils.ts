@@ -443,7 +443,7 @@ export class Utils {
       }
 
       // Safety check: prevent commits directly to protected branches
-      const currentBranch = await Utils.getCurrentBranch();
+      const currentBranch = await Utils.getCurrentBranch(cwd);
       if (currentBranch && await Utils.isProtectedBranch(currentBranch)) {
         return {
           success: false,
