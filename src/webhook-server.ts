@@ -552,6 +552,32 @@ async function processReviewAsync(
     const claudePath = process.env.CLAUDE_CLI_PATH || "claude";
     const maxTurns = parseInt(process.env.CLAUDE_MAX_TURNS || "500", 10);
 
+    // Verify Claude didn't switch branches during execution (e.g., checking out main for comparison)
+    const currentBranch = await Utils.getCurrentBranch(worktreePath);
+    if (currentBranch && currentBranch !== branch) {
+      console.warn(`⚠️  Claude switched from '${branch}' to '${currentBranch}' during execution, switching back...`);
+      const switchBack = await Utils.executeGitCommand(
+        ["checkout", branch],
+        { verbose: config.debug, cwd: worktreePath }
+      );
+      if (!switchBack.success) {
+        // If simple checkout fails (dirty state conflicts), try stashing first
+        console.warn(`   Simple checkout failed, trying stash + checkout...`);
+        await Utils.executeGitCommand(["stash", "--include-untracked"], { verbose: false, cwd: worktreePath });
+        const switchAfterStash = await Utils.executeGitCommand(
+          ["checkout", branch],
+          { verbose: config.debug, cwd: worktreePath }
+        );
+        if (switchAfterStash.success) {
+          await Utils.executeGitCommand(["stash", "pop"], { verbose: false, cwd: worktreePath });
+        } else {
+          console.error(`❌ Failed to switch back to branch '${branch}': ${switchAfterStash.error}`);
+          return;
+        }
+      }
+      console.log(`✅ Switched back to '${branch}'`);
+    }
+
     // Check for uncommitted changes (indicates Claude didn't commit or hook failed)
     const hasUncommitted = await Utils.hasUncommittedChanges(worktreePath);
 
