@@ -2080,7 +2080,7 @@ async function runEstimation(
           projectKey,
           settings
         );
-        const fieldId = configuredField || (await jiraClient.discoverStoryPointsField());
+        const fieldId = configuredField || (await jiraClient.discoverStoryPointsField(taskKey));
 
         // Update story points in JIRA
         if (fieldId) {

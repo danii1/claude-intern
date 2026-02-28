@@ -749,44 +749,80 @@ export class JiraClient {
   }
 
   /**
-   * Cached story points field ID
+   * Cached story points candidate field IDs (all matching fields from JIRA)
    */
-  private storyPointsFieldId: string | null = null;
+  private storyPointsCandidates: Array<{ id: string; name: string }> | null = null;
 
   /**
-   * Discover the story points custom field by searching JIRA field definitions
+   * Discover all story points candidate fields from JIRA field definitions
    */
-  async discoverStoryPointsField(): Promise<string | null> {
-    if (this.storyPointsFieldId) {
-      return this.storyPointsFieldId;
+  private async discoverStoryPointsCandidates(): Promise<Array<{ id: string; name: string }>> {
+    if (this.storyPointsCandidates) {
+      return this.storyPointsCandidates;
     }
 
+    const fields = await this.jiraApiCall("GET", "/rest/api/3/field");
+    const storyPointsNames = [
+      "story point",   // "Story Points", "Story Point Estimate", "Story point estimate"
+      "story_point",   // "story_points", "story_point_estimate"
+      "estimation",    // "Estimation" (JIRA Software board estimation field)
+      "effort point",  // "Effort Points"
+      "sp (fibonacci", // "SP (Fibonacci)" — common custom naming
+    ];
+
+    const candidates = fields
+      .filter((field: any) => {
+        const fieldName = (field.name || "").toLowerCase();
+        return storyPointsNames.some((name) => fieldName.includes(name));
+      })
+      .map((field: any) => ({ id: field.id, name: field.name }));
+
+    this.storyPointsCandidates = candidates;
+    return candidates;
+  }
+
+  /**
+   * Find the editable story points field for a specific issue using editmeta,
+   * falling back to all known candidates if editmeta doesn't help.
+   */
+  async discoverStoryPointsField(issueKey?: string): Promise<string | null> {
     try {
       console.log("🔍 Discovering story points field...");
-      const fields = await this.jiraApiCall("GET", "/rest/api/3/field");
+      const candidates = await this.discoverStoryPointsCandidates();
 
-      // Search for story points fields, preferring "Story point estimate" (newer JIRA field)
-      // over "Story Points" (legacy custom field that may not be on the edit screen)
-      const storyPointsNamesByPriority = [
-        "story point estimate",
-        "story points",
-      ];
+      if (candidates.length === 0) {
+        console.warn("⚠️  Could not find any story points field in JIRA");
+        return null;
+      }
 
-      for (const targetName of storyPointsNamesByPriority) {
-        for (const field of fields) {
-          const fieldName = (field.name || "").toLowerCase();
-          if (fieldName.includes(targetName)) {
-            this.storyPointsFieldId = field.id;
-            console.log(
-              `✅ Found story points field: "${field.name}" (${field.id})`
-            );
-            return field.id;
+      // If we have an issue key, check editmeta to find which field is actually editable
+      if (issueKey) {
+        try {
+          const editMeta = await this.jiraApiCall(
+            "GET",
+            `/rest/api/3/issue/${issueKey}/editmeta`
+          );
+          const editableFieldIds = new Set(Object.keys(editMeta.fields || {}));
+
+          for (const candidate of candidates) {
+            if (editableFieldIds.has(candidate.id)) {
+              console.log(
+                `✅ Found editable story points field: "${candidate.name}" (${candidate.id})`
+              );
+              return candidate.id;
+            }
           }
+          console.log("   No story points field on edit screen, will try all candidates");
+        } catch {
+          // editmeta failed, fall through to returning first candidate
         }
       }
 
-      console.warn("⚠️  Could not find story points field in JIRA");
-      return null;
+      // Fallback: return first candidate
+      console.log(
+        `✅ Found story points field: "${candidates[0].name}" (${candidates[0].id})`
+      );
+      return candidates[0].id;
     } catch (error) {
       console.warn(`⚠️  Failed to discover story points field: ${error}`);
       return null;
@@ -794,31 +830,52 @@ export class JiraClient {
   }
 
   /**
-   * Update story points for an issue
+   * Update story points for an issue, trying all candidate fields if the first fails
    */
   async updateStoryPoints(
     issueKey: string,
     fieldId: string,
     points: number
   ): Promise<void> {
+    console.log(
+      `📊 Setting story points for ${issueKey} to ${points} (field: ${fieldId})...`
+    );
+
+    // Try the provided field first
     try {
-      console.log(
-        `📊 Setting story points for ${issueKey} to ${points} (field: ${fieldId})...`
-      );
-
       await this.jiraApiCall("PUT", `/rest/api/3/issue/${issueKey}`, {
-        fields: {
-          [fieldId]: points,
-        },
+        fields: { [fieldId]: points },
       });
-
       console.log(`✅ Successfully set story points for ${issueKey} to ${points}`);
+      return;
     } catch (error) {
-      console.warn(
-        `⚠️  Failed to update story points for ${issueKey}: ${error}`
-      );
-      throw error;
+      const errorMsg = String(error);
+      if (!errorMsg.includes("not on the appropriate screen") && !errorMsg.includes("cannot be set")) {
+        throw error;
+      }
+      console.log(`   Field ${fieldId} not editable, trying other candidates...`);
     }
+
+    // Try remaining candidate fields
+    const candidates = await this.discoverStoryPointsCandidates();
+    for (const candidate of candidates) {
+      if (candidate.id === fieldId) continue;
+      try {
+        await this.jiraApiCall("PUT", `/rest/api/3/issue/${issueKey}`, {
+          fields: { [candidate.id]: points },
+        });
+        console.log(
+          `✅ Successfully set story points for ${issueKey} to ${points} (field: "${candidate.name}" / ${candidate.id})`
+        );
+        return;
+      } catch {
+        // try next candidate
+      }
+    }
+
+    throw new Error(
+      `Could not set story points for ${issueKey} — none of the story points fields are editable for this issue type`
+    );
   }
 
   /**
