@@ -26,6 +26,12 @@ export interface ProjectSettings {
        * e.g., "To Do", "Backlog", "Open"
        */
       todoStatus?: string;
+      /**
+       * Custom field ID or name for story points
+       * If not set, auto-discovery will search for "Story Points" or "Story point estimate" fields
+       * e.g., "customfield_10016"
+       */
+      storyPointsField?: string;
     };
   };
 }

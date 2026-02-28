@@ -206,7 +206,8 @@ export class JiraClient {
     const claudeInternMarkers = [
       "Implementation Completed by Claude",
       "Automated Task Feasibility Assessment",
-      "Implementation Incomplete"
+      "Implementation Incomplete",
+      "Automated Story Points Estimation"
     ];
 
     return claudeInternMarkers.some(marker => commentText.includes(marker));
@@ -745,5 +746,228 @@ export class JiraClient {
       linkedResources,
       relatedIssues
     );
+  }
+
+  /**
+   * Cached story points field ID
+   */
+  private storyPointsFieldId: string | null = null;
+
+  /**
+   * Discover the story points custom field by searching JIRA field definitions
+   */
+  async discoverStoryPointsField(): Promise<string | null> {
+    if (this.storyPointsFieldId) {
+      return this.storyPointsFieldId;
+    }
+
+    try {
+      console.log("🔍 Discovering story points field...");
+      const fields = await this.jiraApiCall("GET", "/rest/api/3/field");
+
+      // Search for common story points field names
+      const storyPointsNames = [
+        "story points",
+        "story point estimate",
+      ];
+
+      for (const field of fields) {
+        const fieldName = (field.name || "").toLowerCase();
+        if (storyPointsNames.some((name) => fieldName.includes(name))) {
+          this.storyPointsFieldId = field.id;
+          console.log(
+            `✅ Found story points field: "${field.name}" (${field.id})`
+          );
+          return field.id;
+        }
+      }
+
+      console.warn("⚠️  Could not find story points field in JIRA");
+      return null;
+    } catch (error) {
+      console.warn(`⚠️  Failed to discover story points field: ${error}`);
+      return null;
+    }
+  }
+
+  /**
+   * Update story points for an issue
+   */
+  async updateStoryPoints(
+    issueKey: string,
+    fieldId: string,
+    points: number
+  ): Promise<void> {
+    try {
+      console.log(
+        `📊 Setting story points for ${issueKey} to ${points} (field: ${fieldId})...`
+      );
+
+      await this.jiraApiCall("PUT", `/rest/api/3/issue/${issueKey}`, {
+        fields: {
+          [fieldId]: points,
+        },
+      });
+
+      console.log(`✅ Successfully set story points for ${issueKey} to ${points}`);
+    } catch (error) {
+      console.warn(
+        `⚠️  Failed to update story points for ${issueKey}: ${error}`
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Post an estimation comment to a JIRA issue
+   */
+  async postEstimationComment(
+    issueKey: string,
+    result: {
+      storyPoints: number;
+      confidence: "high" | "medium" | "low";
+      reasoning: string;
+      risks: string[];
+      unclearAreas: string[];
+      summary: string;
+    }
+  ): Promise<void> {
+    try {
+      console.log(`💬 Posting estimation comment to ${issueKey}...`);
+
+      const confidenceEmoji =
+        result.confidence === "high"
+          ? "🟢"
+          : result.confidence === "medium"
+          ? "🟡"
+          : "🔴";
+
+      const content: any[] = [
+        {
+          type: "heading",
+          attrs: { level: 3 },
+          content: [
+            {
+              type: "text",
+              text: "🤖 Automated Story Points Estimation",
+              marks: [{ type: "strong" }],
+            },
+          ],
+        },
+        {
+          type: "paragraph",
+          content: [
+            {
+              type: "text",
+              text: "Story Points: ",
+              marks: [{ type: "strong" }],
+            },
+            { type: "text", text: `${result.storyPoints}` },
+            { type: "text", text: "  |  " },
+            {
+              type: "text",
+              text: "Confidence: ",
+              marks: [{ type: "strong" }],
+            },
+            {
+              type: "text",
+              text: `${confidenceEmoji} ${result.confidence}`,
+            },
+          ],
+        },
+        {
+          type: "heading",
+          attrs: { level: 4 },
+          content: [{ type: "text", text: "Reasoning" }],
+        },
+        {
+          type: "paragraph",
+          content: [{ type: "text", text: result.reasoning }],
+        },
+      ];
+
+      if (result.risks.length > 0) {
+        content.push({
+          type: "heading",
+          attrs: { level: 4 },
+          content: [{ type: "text", text: "Risks" }],
+        });
+        content.push({
+          type: "bulletList",
+          content: result.risks.map((risk) => ({
+            type: "listItem",
+            content: [
+              {
+                type: "paragraph",
+                content: [{ type: "text", text: risk }],
+              },
+            ],
+          })),
+        });
+      }
+
+      if (result.unclearAreas.length > 0) {
+        content.push({
+          type: "heading",
+          attrs: { level: 4 },
+          content: [{ type: "text", text: "Unclear Areas" }],
+        });
+        content.push({
+          type: "bulletList",
+          content: result.unclearAreas.map((area) => ({
+            type: "listItem",
+            content: [
+              {
+                type: "paragraph",
+                content: [{ type: "text", text: area }],
+              },
+            ],
+          })),
+        });
+      }
+
+      if (result.confidence === "low") {
+        content.push({
+          type: "panel",
+          attrs: { panelType: "warning" },
+          content: [
+            {
+              type: "paragraph",
+              content: [
+                {
+                  type: "text",
+                  text: "⚠️ Low confidence estimate — ",
+                  marks: [{ type: "strong" }],
+                },
+                {
+                  type: "text",
+                  text: "Please provide more details on the task scope and requirements for a more accurate estimate.",
+                },
+              ],
+            },
+          ],
+        });
+      }
+
+      const commentBody = {
+        body: {
+          type: "doc",
+          version: 1,
+          content: content,
+        },
+      };
+
+      await this.jiraApiCall(
+        "POST",
+        `/rest/api/3/issue/${issueKey}/comment`,
+        commentBody
+      );
+      console.log(`✅ Successfully posted estimation comment to ${issueKey}`);
+    } catch (error) {
+      console.warn(
+        `⚠️  Failed to post estimation comment to ${issueKey}: ${error}`
+      );
+      throw error;
+    }
   }
 }
