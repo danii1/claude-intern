@@ -1988,7 +1988,7 @@ async function runEstimation(
 
     console.log("📊 Running story points estimation with Claude...");
     console.log(
-      `   Command: ${claudePath} -p --dangerously-skip-permissions --max-turns 5`
+      `   Command: ${claudePath} -p --dangerously-skip-permissions --max-turns 10`
     );
 
     let stdoutOutput = "";
@@ -1997,7 +1997,7 @@ async function runEstimation(
 
     const claude: ChildProcess = spawn(
       claudePath,
-      ["-p", "--dangerously-skip-permissions", "--max-turns", "5"],
+      ["-p", "--dangerously-skip-permissions", "--max-turns", "10"],
       {
         stdio: ["pipe", "pipe", "pipe"],
       }

@@ -765,20 +765,23 @@ export class JiraClient {
       console.log("🔍 Discovering story points field...");
       const fields = await this.jiraApiCall("GET", "/rest/api/3/field");
 
-      // Search for common story points field names
-      const storyPointsNames = [
-        "story points",
+      // Search for story points fields, preferring "Story point estimate" (newer JIRA field)
+      // over "Story Points" (legacy custom field that may not be on the edit screen)
+      const storyPointsNamesByPriority = [
         "story point estimate",
+        "story points",
       ];
 
-      for (const field of fields) {
-        const fieldName = (field.name || "").toLowerCase();
-        if (storyPointsNames.some((name) => fieldName.includes(name))) {
-          this.storyPointsFieldId = field.id;
-          console.log(
-            `✅ Found story points field: "${field.name}" (${field.id})`
-          );
-          return field.id;
+      for (const targetName of storyPointsNamesByPriority) {
+        for (const field of fields) {
+          const fieldName = (field.name || "").toLowerCase();
+          if (fieldName.includes(targetName)) {
+            this.storyPointsFieldId = field.id;
+            console.log(
+              `✅ Found story points field: "${field.name}" (${field.id})`
+            );
+            return field.id;
+          }
         }
       }
 
