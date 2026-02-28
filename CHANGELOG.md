@@ -1,5 +1,37 @@
 # Claude Intern Changelog
 
+## [2.3.0] - 2026-02-28
+
+### Added
+
+- **Estimation Mode**: New `--estimate` flag runs Claude to estimate story points for JIRA tasks
+  - Fibonacci-scale estimates (1–21) with confidence level, reasoning, risks, and unclear areas
+  - Auto-discovers and sets the story points field in JIRA
+  - Posts rich estimation comment to JIRA; low-confidence estimates ask for more details
+  - Skips tasks created less than 24 hours ago
+  - Per-project `storyPointsField` override in `settings.json`
+  - Example: `claude-intern --estimate --jql "project = PROJ AND status = 'To Do'"`
+
+- **Smart Re-Estimation**: Re-estimates tasks updated since the last estimate
+  - Compares issue `updated` timestamp against estimation comment date
+  - Updates existing comment in place instead of creating duplicates
+
+## [2.2.0] - 2026-02-28
+
+### Added
+
+- **Plan-Implementation Pipeline**: Detects when Claude creates a plan instead of implementing, then automatically re-runs Claude to implement it
+
+- **Claude Subprocess Timeout**: Configurable timeout (default: 60 min, via `CLAUDE_TIMEOUT_MINUTES`) prevents queue blocking
+
+### Changed
+
+- **Webhook Review Flow**: Faster webhook responses, review iterations squashed into single commit, removed noisy reply comments
+
+### Fixed
+
+- **Worktree Branch Handling**: Fixed branch switching, stale worktree state, and recovery when Claude switches branches during review
+
 ## [2.1.0] - 2026-01-23
 
 ### Added
