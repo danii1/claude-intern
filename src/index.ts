@@ -1209,6 +1209,29 @@ async function main(): Promise<void> {
             continue;
           }
 
+          // Check if task already has an estimation comment
+          const existingEstimation = await jiraClient.findEstimationComment(taskKey);
+          let existingCommentId: string | undefined;
+
+          if (existingEstimation) {
+            // Compare estimation comment date with issue updated date
+            const estimationDate = new Date(existingEstimation.created);
+            const issueUpdated = new Date(issue.fields.updated);
+
+            if (issueUpdated <= estimationDate) {
+              console.log(
+                `⏭️  Skipping ${taskKey} — already estimated and not updated since`
+              );
+              estimationResults.skipped++;
+              continue;
+            }
+
+            console.log(
+              `🔄 Re-estimating ${taskKey} — task updated since last estimate`
+            );
+            existingCommentId = existingEstimation.commentId;
+          }
+
           estimationResults.total++;
 
           // Fetch comments and linked resources
@@ -1243,7 +1266,8 @@ async function main(): Promise<void> {
             taskKey,
             jiraClient,
             projectSettings,
-            options.skipJiraComments
+            options.skipJiraComments,
+            existingCommentId
           );
 
           // Clean up temp file
@@ -1975,7 +1999,8 @@ async function runEstimation(
   taskKey: string,
   jiraClient: JiraClient,
   settings: ProjectSettings | null,
-  skipJiraComments = false
+  skipJiraComments = false,
+  existingCommentId?: string
 ): Promise<EstimationResult | null> {
   return new Promise((resolve, reject) => {
     if (!existsSync(estimationFile)) {
@@ -2104,13 +2129,21 @@ async function runEstimation(
           );
         }
 
-        // Post estimation comment to JIRA
+        // Post or update estimation comment on JIRA
         if (!skipJiraComments) {
           try {
-            await jiraClient.postEstimationComment(taskKey, result);
+            if (existingCommentId) {
+              await jiraClient.updateEstimationComment(
+                taskKey,
+                existingCommentId,
+                result
+              );
+            } else {
+              await jiraClient.postEstimationComment(taskKey, result);
+            }
           } catch (commentError) {
             console.warn(
-              `⚠️  Failed to post estimation comment: ${commentError}`
+              `⚠️  Failed to ${existingCommentId ? "update" : "post"} estimation comment: ${commentError}`
             );
           }
         } else {

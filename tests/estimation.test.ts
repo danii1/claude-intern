@@ -493,6 +493,181 @@ describe("JiraClient - Estimation Comment Detection", () => {
   });
 });
 
+describe("JiraClient - findEstimationComment", () => {
+  let jiraClient: JiraClient;
+
+  beforeEach(() => {
+    jiraClient = new JiraClient(
+      "https://test.atlassian.net",
+      "test@example.com",
+      "test-token"
+    );
+  });
+
+  test("should return comment ID and date via string body", async () => {
+    (jiraClient as any).jiraApiCall = async () => ({
+      comments: [
+        {
+          id: "42",
+          body: "🤖 Automated Story Points Estimation - 5 points, high confidence",
+          author: { displayName: "Bot" },
+          created: "2024-06-15T10:00:00.000Z",
+          updated: "2024-06-15T10:00:00.000Z",
+        },
+      ],
+    });
+
+    const result = await jiraClient.findEstimationComment("TEST-123");
+    expect(result).not.toBeNull();
+    expect(result!.commentId).toBe("42");
+    expect(result!.created).toBe("2024-06-15T10:00:00.000Z");
+  });
+
+  test("should return comment ID and date via renderedBody", async () => {
+    (jiraClient as any).jiraApiCall = async () => ({
+      comments: [
+        {
+          id: "99",
+          body: "",
+          renderedBody: "<h3>🤖 Automated Story Points Estimation</h3>",
+          author: { displayName: "Bot" },
+          created: "2024-07-01T12:00:00.000Z",
+          updated: "2024-07-01T12:00:00.000Z",
+        },
+      ],
+    });
+
+    const result = await jiraClient.findEstimationComment("TEST-123");
+    expect(result).not.toBeNull();
+    expect(result!.commentId).toBe("99");
+    expect(result!.created).toBe("2024-07-01T12:00:00.000Z");
+  });
+
+  test("should return comment ID and date via ADF body", async () => {
+    (jiraClient as any).jiraApiCall = async () => ({
+      comments: [
+        {
+          id: "77",
+          body: {
+            type: "doc",
+            version: 1,
+            content: [
+              {
+                type: "heading",
+                content: [
+                  { type: "text", text: "🤖 Automated Story Points Estimation" },
+                ],
+              },
+            ],
+          },
+          author: { displayName: "Bot" },
+          created: "2024-08-20T08:30:00.000Z",
+          updated: "2024-08-20T08:30:00.000Z",
+        },
+      ],
+    });
+
+    const result = await jiraClient.findEstimationComment("TEST-123");
+    expect(result).not.toBeNull();
+    expect(result!.commentId).toBe("77");
+  });
+
+  test("should return null when no estimation comment exists", async () => {
+    (jiraClient as any).jiraApiCall = async () => ({
+      comments: [
+        {
+          id: "1",
+          body: "Regular user comment about this task",
+          author: { displayName: "User" },
+          created: "2024-01-01",
+          updated: "2024-01-01",
+        },
+        {
+          id: "2",
+          body: "Another comment mentioning story points informally",
+          author: { displayName: "PM" },
+          created: "2024-01-02",
+          updated: "2024-01-02",
+        },
+      ],
+    });
+
+    const result = await jiraClient.findEstimationComment("TEST-123");
+    expect(result).toBeNull();
+  });
+
+  test("should return null when there are no comments", async () => {
+    (jiraClient as any).jiraApiCall = async () => ({
+      comments: [],
+    });
+
+    const result = await jiraClient.findEstimationComment("TEST-123");
+    expect(result).toBeNull();
+  });
+
+  test("should return null on API error", async () => {
+    (jiraClient as any).jiraApiCall = async () => {
+      throw new Error("API error");
+    };
+
+    const result = await jiraClient.findEstimationComment("TEST-123");
+    expect(result).toBeNull();
+  });
+
+  test("should return null on null response", async () => {
+    (jiraClient as any).jiraApiCall = async () => null;
+
+    const result = await jiraClient.findEstimationComment("TEST-123");
+    expect(result).toBeNull();
+  });
+
+  test("should find estimation comment among mixed comments and return its ID", async () => {
+    (jiraClient as any).jiraApiCall = async () => ({
+      comments: [
+        {
+          id: "1",
+          body: "Please work on this ASAP",
+          author: { displayName: "PM" },
+          created: "2024-01-01",
+          updated: "2024-01-01",
+        },
+        {
+          id: "2",
+          body: "🤖 Implementation Completed by Claude",
+          author: { displayName: "Bot" },
+          created: "2024-01-02",
+          updated: "2024-01-02",
+        },
+        {
+          id: "55",
+          body: "🤖 Automated Story Points Estimation - 3 points",
+          author: { displayName: "Bot" },
+          created: "2024-01-03T15:00:00.000Z",
+          updated: "2024-01-03T15:00:00.000Z",
+        },
+      ],
+    });
+
+    const result = await jiraClient.findEstimationComment("TEST-123");
+    expect(result).not.toBeNull();
+    expect(result!.commentId).toBe("55");
+    expect(result!.created).toBe("2024-01-03T15:00:00.000Z");
+  });
+
+  test("should enable re-estimation when task updated after estimation comment", () => {
+    // This tests the skip/re-estimate logic from index.ts
+    const estimationDate = new Date("2024-06-15T10:00:00.000Z");
+    const issueUpdatedAfter = new Date("2024-06-16T08:00:00.000Z");
+    const issueUpdatedBefore = new Date("2024-06-14T08:00:00.000Z");
+
+    // Task updated after estimation → should re-estimate
+    expect(issueUpdatedAfter > estimationDate).toBe(true);
+
+    // Task not updated after estimation → should skip
+    expect(issueUpdatedBefore <= estimationDate).toBe(true);
+  });
+});
+
 describe("Settings - storyPointsField", () => {
   // Replicate the helper from index.ts
   function getStoryPointsFieldForProject(

@@ -749,6 +749,50 @@ export class JiraClient {
   }
 
   /**
+   * Find the existing Claude Intern estimation comment for an issue, if any.
+   * Returns the comment ID and creation date, or null if not found.
+   */
+  async findEstimationComment(
+    issueKey: string
+  ): Promise<{ commentId: string; created: string } | null> {
+    try {
+      const response = await this.jiraApiCall(
+        "GET",
+        `/rest/api/3/issue/${issueKey}/comment?expand=renderedBody`
+      );
+
+      if (!response || typeof response !== "object") {
+        return null;
+      }
+
+      const allComments = response.comments || [];
+      for (const comment of allComments) {
+        let commentText = "";
+        if (comment.renderedBody) {
+          commentText = comment.renderedBody;
+        } else if (typeof comment.body === "string" && comment.body.length > 0) {
+          commentText = comment.body;
+        } else if (
+          comment.body &&
+          typeof comment.body === "object" &&
+          "content" in comment.body
+        ) {
+          commentText = JSON.stringify(comment.body);
+        }
+        if (commentText.includes("Automated Story Points Estimation")) {
+          return { commentId: comment.id, created: comment.created };
+        }
+      }
+      return null;
+    } catch (error) {
+      console.warn(
+        `⚠️  Failed to check for estimation comment on ${issueKey}: ${error}`
+      );
+      return null;
+    }
+  }
+
+  /**
    * Cached story points candidate field IDs (all matching fields from JIRA)
    */
   private storyPointsCandidates: Array<{ id: string; name: string }> | null = null;
@@ -879,6 +923,134 @@ export class JiraClient {
   }
 
   /**
+   * Build ADF content for an estimation comment
+   */
+  private buildEstimationCommentADF(result: {
+    storyPoints: number;
+    confidence: "high" | "medium" | "low";
+    reasoning: string;
+    risks: string[];
+    unclearAreas: string[];
+    summary: string;
+  }): any[] {
+    const confidenceEmoji =
+      result.confidence === "high"
+        ? "🟢"
+        : result.confidence === "medium"
+        ? "🟡"
+        : "🔴";
+
+    const content: any[] = [
+      {
+        type: "heading",
+        attrs: { level: 3 },
+        content: [
+          {
+            type: "text",
+            text: "🤖 Automated Story Points Estimation",
+            marks: [{ type: "strong" }],
+          },
+        ],
+      },
+      {
+        type: "paragraph",
+        content: [
+          {
+            type: "text",
+            text: "Story Points: ",
+            marks: [{ type: "strong" }],
+          },
+          { type: "text", text: `${result.storyPoints}` },
+          { type: "text", text: "  |  " },
+          {
+            type: "text",
+            text: "Confidence: ",
+            marks: [{ type: "strong" }],
+          },
+          {
+            type: "text",
+            text: `${confidenceEmoji} ${result.confidence}`,
+          },
+        ],
+      },
+      {
+        type: "heading",
+        attrs: { level: 4 },
+        content: [{ type: "text", text: "Reasoning" }],
+      },
+      {
+        type: "paragraph",
+        content: [{ type: "text", text: result.reasoning }],
+      },
+    ];
+
+    if (result.risks.length > 0) {
+      content.push({
+        type: "heading",
+        attrs: { level: 4 },
+        content: [{ type: "text", text: "Risks" }],
+      });
+      content.push({
+        type: "bulletList",
+        content: result.risks.map((risk) => ({
+          type: "listItem",
+          content: [
+            {
+              type: "paragraph",
+              content: [{ type: "text", text: risk }],
+            },
+          ],
+        })),
+      });
+    }
+
+    if (result.unclearAreas.length > 0) {
+      content.push({
+        type: "heading",
+        attrs: { level: 4 },
+        content: [{ type: "text", text: "Unclear Areas" }],
+      });
+      content.push({
+        type: "bulletList",
+        content: result.unclearAreas.map((area) => ({
+          type: "listItem",
+          content: [
+            {
+              type: "paragraph",
+              content: [{ type: "text", text: area }],
+            },
+          ],
+        })),
+      });
+    }
+
+    if (result.confidence === "low") {
+      content.push({
+        type: "panel",
+        attrs: { panelType: "warning" },
+        content: [
+          {
+            type: "paragraph",
+            content: [
+              {
+                type: "text",
+                text: "⚠️ Low confidence estimate — ",
+                marks: [{ type: "strong" }],
+              },
+              {
+                type: "text",
+                text: "Please provide more details on the task scope and requirements for a more accurate estimate.",
+              },
+            ],
+          },
+        ],
+      });
+    }
+
+    return content;
+  }
+
+  /**
    * Post an estimation comment to a JIRA issue
    */
   async postEstimationComment(
@@ -895,125 +1067,11 @@ export class JiraClient {
     try {
       console.log(`💬 Posting estimation comment to ${issueKey}...`);
 
-      const confidenceEmoji =
-        result.confidence === "high"
-          ? "🟢"
-          : result.confidence === "medium"
-          ? "🟡"
-          : "🔴";
-
-      const content: any[] = [
-        {
-          type: "heading",
-          attrs: { level: 3 },
-          content: [
-            {
-              type: "text",
-              text: "🤖 Automated Story Points Estimation",
-              marks: [{ type: "strong" }],
-            },
-          ],
-        },
-        {
-          type: "paragraph",
-          content: [
-            {
-              type: "text",
-              text: "Story Points: ",
-              marks: [{ type: "strong" }],
-            },
-            { type: "text", text: `${result.storyPoints}` },
-            { type: "text", text: "  |  " },
-            {
-              type: "text",
-              text: "Confidence: ",
-              marks: [{ type: "strong" }],
-            },
-            {
-              type: "text",
-              text: `${confidenceEmoji} ${result.confidence}`,
-            },
-          ],
-        },
-        {
-          type: "heading",
-          attrs: { level: 4 },
-          content: [{ type: "text", text: "Reasoning" }],
-        },
-        {
-          type: "paragraph",
-          content: [{ type: "text", text: result.reasoning }],
-        },
-      ];
-
-      if (result.risks.length > 0) {
-        content.push({
-          type: "heading",
-          attrs: { level: 4 },
-          content: [{ type: "text", text: "Risks" }],
-        });
-        content.push({
-          type: "bulletList",
-          content: result.risks.map((risk) => ({
-            type: "listItem",
-            content: [
-              {
-                type: "paragraph",
-                content: [{ type: "text", text: risk }],
-              },
-            ],
-          })),
-        });
-      }
-
-      if (result.unclearAreas.length > 0) {
-        content.push({
-          type: "heading",
-          attrs: { level: 4 },
-          content: [{ type: "text", text: "Unclear Areas" }],
-        });
-        content.push({
-          type: "bulletList",
-          content: result.unclearAreas.map((area) => ({
-            type: "listItem",
-            content: [
-              {
-                type: "paragraph",
-                content: [{ type: "text", text: area }],
-              },
-            ],
-          })),
-        });
-      }
-
-      if (result.confidence === "low") {
-        content.push({
-          type: "panel",
-          attrs: { panelType: "warning" },
-          content: [
-            {
-              type: "paragraph",
-              content: [
-                {
-                  type: "text",
-                  text: "⚠️ Low confidence estimate — ",
-                  marks: [{ type: "strong" }],
-                },
-                {
-                  type: "text",
-                  text: "Please provide more details on the task scope and requirements for a more accurate estimate.",
-                },
-              ],
-            },
-          ],
-        });
-      }
-
       const commentBody = {
         body: {
           type: "doc",
           version: 1,
-          content: content,
+          content: this.buildEstimationCommentADF(result),
         },
       };
 
@@ -1026,6 +1084,50 @@ export class JiraClient {
     } catch (error) {
       console.warn(
         `⚠️  Failed to post estimation comment to ${issueKey}: ${error}`
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Update an existing estimation comment on a JIRA issue
+   */
+  async updateEstimationComment(
+    issueKey: string,
+    commentId: string,
+    result: {
+      storyPoints: number;
+      confidence: "high" | "medium" | "low";
+      reasoning: string;
+      risks: string[];
+      unclearAreas: string[];
+      summary: string;
+    }
+  ): Promise<void> {
+    try {
+      console.log(
+        `💬 Updating estimation comment ${commentId} on ${issueKey}...`
+      );
+
+      const commentBody = {
+        body: {
+          type: "doc",
+          version: 1,
+          content: this.buildEstimationCommentADF(result),
+        },
+      };
+
+      await this.jiraApiCall(
+        "PUT",
+        `/rest/api/3/issue/${issueKey}/comment/${commentId}`,
+        commentBody
+      );
+      console.log(
+        `✅ Successfully updated estimation comment on ${issueKey}`
+      );
+    } catch (error) {
+      console.warn(
+        `⚠️  Failed to update estimation comment on ${issueKey}: ${error}`
       );
       throw error;
     }
