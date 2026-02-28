@@ -58,6 +58,7 @@ interface ClarityAssessment {
 interface EstimationResult {
   storyPoints: number; // 1, 2, 3, 5, 8, 13, 21
   confidence: "high" | "medium" | "low";
+  implementationConfidence: number; // 0-10 likelihood AI can implement
   reasoning: string;
   risks: string[];
   unclearAreas: string[];
@@ -2090,6 +2091,13 @@ async function runEstimation(
         console.log(`\n📊 Estimation Result for ${taskKey}:`);
         console.log(`   Story Points: ${result.storyPoints}`);
         console.log(`   Confidence: ${result.confidence}`);
+        const implLabel =
+          result.implementationConfidence >= 9 ? "Almost certain"
+          : result.implementationConfidence >= 7 ? "High chance"
+          : result.implementationConfidence >= 5 ? "May need guidance"
+          : result.implementationConfidence >= 3 ? "Significant ambiguity"
+          : "Needs human judgment";
+        console.log(`   AI Can Implement: ${result.implementationConfidence}/10 — ${implLabel}`);
         console.log(`   Summary: ${result.summary}`);
 
         if (result.risks.length > 0) {
@@ -2216,9 +2224,16 @@ function parseEstimationResponse(output: string): EstimationResult {
     );
   }
 
+  // Clamp implementationConfidence to 0-10, default to 5 if missing
+  let implConf = typeof parsed.implementationConfidence === "number"
+    ? parsed.implementationConfidence
+    : 5;
+  implConf = Math.max(0, Math.min(10, Math.round(implConf)));
+
   return {
     storyPoints: parsed.storyPoints,
     confidence: parsed.confidence,
+    implementationConfidence: implConf,
     reasoning: parsed.reasoning || "",
     risks: Array.isArray(parsed.risks) ? parsed.risks : [],
     unclearAreas: Array.isArray(parsed.unclearAreas)

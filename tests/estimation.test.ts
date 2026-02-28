@@ -111,9 +111,16 @@ function parseEstimationResponse(output: string) {
     );
   }
 
+  // Clamp implementationConfidence to 0-10, default to 5 if missing
+  let implConf = typeof parsed.implementationConfidence === "number"
+    ? parsed.implementationConfidence
+    : 5;
+  implConf = Math.max(0, Math.min(10, Math.round(implConf)));
+
   return {
     storyPoints: parsed.storyPoints as number,
     confidence: parsed.confidence as "high" | "medium" | "low",
+    implementationConfidence: implConf,
     reasoning: parsed.reasoning || "",
     risks: Array.isArray(parsed.risks) ? parsed.risks : [],
     unclearAreas: Array.isArray(parsed.unclearAreas)
@@ -228,6 +235,31 @@ That's my assessment.`;
     expect(result.unclearAreas).toEqual([]);
   });
 
+  test("should parse implementationConfidence when provided", () => {
+    const output = `{"storyPoints": 5, "confidence": "high", "implementationConfidence": 8, "reasoning": "clear task", "risks": [], "unclearAreas": [], "summary": "ok"}`;
+    const result = parseEstimationResponse(output);
+    expect(result.implementationConfidence).toBe(8);
+  });
+
+  test("should default implementationConfidence to 5 when missing", () => {
+    const output = `{"storyPoints": 3, "confidence": "medium", "reasoning": "ok", "risks": [], "unclearAreas": [], "summary": "ok"}`;
+    const result = parseEstimationResponse(output);
+    expect(result.implementationConfidence).toBe(5);
+  });
+
+  test("should clamp implementationConfidence to 0-10 range", () => {
+    const outputHigh = `{"storyPoints": 5, "confidence": "high", "implementationConfidence": 15, "reasoning": "ok", "risks": [], "unclearAreas": [], "summary": "ok"}`;
+    expect(parseEstimationResponse(outputHigh).implementationConfidence).toBe(10);
+
+    const outputLow = `{"storyPoints": 5, "confidence": "high", "implementationConfidence": -3, "reasoning": "ok", "risks": [], "unclearAreas": [], "summary": "ok"}`;
+    expect(parseEstimationResponse(outputLow).implementationConfidence).toBe(0);
+  });
+
+  test("should round implementationConfidence to integer", () => {
+    const output = `{"storyPoints": 5, "confidence": "high", "implementationConfidence": 7.6, "reasoning": "ok", "risks": [], "unclearAreas": [], "summary": "ok"}`;
+    expect(parseEstimationResponse(output).implementationConfidence).toBe(8);
+  });
+
   test("should prefer code-fenced JSON over bare JSON", () => {
     const output = `Some text with {"storyPoints": 1} in it.
 
@@ -273,6 +305,14 @@ describe("ClaudeFormatter - Estimation Prompt", () => {
     expect(prompt).toContain('"risks"');
     expect(prompt).toContain('"unclearAreas"');
     expect(prompt).toContain('"summary"');
+  });
+
+  test("should include implementationConfidence in JSON format", () => {
+    const details = createMockTaskDetails();
+    const prompt = ClaudeFormatter.formatEstimationPrompt(details);
+
+    expect(prompt).toContain('"implementationConfidence"');
+    expect(prompt).toContain("0–10");
   });
 
   test("should include labels and components when present", () => {

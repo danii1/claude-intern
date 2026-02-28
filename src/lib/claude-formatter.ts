@@ -725,6 +725,7 @@ Analyze this task and estimate the story points. Respond with ONLY a JSON object
 {
   "storyPoints": <number>,
   "confidence": "<high|medium|low>",
+  "implementationConfidence": <number>,
   "reasoning": "<string>",
   "risks": ["<string>", ...],
   "unclearAreas": ["<string>", ...],
@@ -740,6 +741,17 @@ Analyze this task and estimate the story points. Respond with ONLY a JSON object
 - **8** — Large feature, cross-cutting concerns, integration work
 - **13** — Very large, multiple subsystems, high complexity
 - **21** — Epic-sized, major architectural change, high uncertainty
+
+## Implementation Confidence (0–10)
+
+Rate how likely an AI coding agent can successfully implement this task autonomously:
+- **9–10** — Trivial/mechanical change, almost certain success
+- **7–8** — Clear requirements, standard patterns, high chance of success
+- **5–6** — Moderate complexity, may need some human guidance
+- **3–4** — Significant ambiguity, external dependencies, or domain knowledge needed
+- **0–2** — Requires human judgment, creative decisions, or access to systems the AI cannot reach
+
+Consider: clarity of requirements, availability of context in the codebase, need for external resources (designs, APIs, credentials), and whether the task involves subjective decisions.
 
 ## Guidelines
 

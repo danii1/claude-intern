@@ -928,6 +928,7 @@ export class JiraClient {
   private buildEstimationCommentADF(result: {
     storyPoints: number;
     confidence: "high" | "medium" | "low";
+    implementationConfidence?: number;
     reasoning: string;
     risks: string[];
     unclearAreas: string[];
@@ -973,6 +974,35 @@ export class JiraClient {
           },
         ],
       },
+    ];
+
+    if (typeof result.implementationConfidence === "number") {
+      const score = result.implementationConfidence;
+      const filled = "🟩".repeat(score);
+      const empty = "⬜".repeat(10 - score);
+      const label =
+        score >= 9 ? "Almost certain"
+        : score >= 7 ? "High chance"
+        : score >= 5 ? "May need guidance"
+        : score >= 3 ? "Significant ambiguity"
+        : "Needs human judgment";
+      content.push({
+        type: "paragraph",
+        content: [
+          {
+            type: "text",
+            text: "AI Implementation Confidence: ",
+            marks: [{ type: "strong" }],
+          },
+          {
+            type: "text",
+            text: `${filled}${empty} ${score}/10 — ${label}`,
+          },
+        ],
+      });
+    }
+
+    content.push(
       {
         type: "heading",
         attrs: { level: 4 },
@@ -982,7 +1012,7 @@ export class JiraClient {
         type: "paragraph",
         content: [{ type: "text", text: result.reasoning }],
       },
-    ];
+    );
 
     if (result.risks.length > 0) {
       content.push({
@@ -1058,6 +1088,7 @@ export class JiraClient {
     result: {
       storyPoints: number;
       confidence: "high" | "medium" | "low";
+      implementationConfidence?: number;
       reasoning: string;
       risks: string[];
       unclearAreas: string[];
@@ -1098,6 +1129,7 @@ export class JiraClient {
     result: {
       storyPoints: number;
       confidence: "high" | "medium" | "low";
+      implementationConfidence?: number;
       reasoning: string;
       risks: string[];
       unclearAreas: string[];
