@@ -2113,6 +2113,9 @@ async function runEstimation(
           projectKey,
           settings
         );
+        if (configuredField) {
+          console.log(`📊 Using configured story points field: ${configuredField}`);
+        }
         const fieldId = configuredField || (await jiraClient.discoverStoryPointsField(taskKey));
 
         // Update story points in JIRA
