@@ -443,7 +443,7 @@ export class Utils {
       }
 
       // Safety check: prevent commits directly to protected branches
-      const currentBranch = await Utils.getCurrentBranch();
+      const currentBranch = await Utils.getCurrentBranch(cwd);
       if (currentBranch && await Utils.isProtectedBranch(currentBranch)) {
         return {
           success: false,
@@ -1372,6 +1372,16 @@ export class Utils {
             );
             const hasOrigin = originCheck.success;
 
+            // Discard any leftover changes from previous reviews before switching
+            await Utils.executeGitCommand(
+              ["reset", "--hard"],
+              { verbose: false, cwd: worktreePath }
+            );
+            await Utils.executeGitCommand(
+              ["clean", "-fd"],
+              { verbose: false, cwd: worktreePath }
+            );
+
             let switchResult;
             if (hasOrigin) {
               // Try checkout with -B to force create/reset branch tracking origin
@@ -1398,6 +1408,12 @@ export class Utils {
                   { verbose, cwd: worktreePath }
                 );
               }
+
+              // Clean again after checkout to remove any untracked files from the new branch state
+              await Utils.executeGitCommand(
+                ["clean", "-fd"],
+                { verbose: false, cwd: worktreePath }
+              );
 
               if (verbose) {
                 console.log(`✅ Switched to branch ${branch}`);
