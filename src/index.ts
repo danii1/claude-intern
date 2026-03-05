@@ -2200,10 +2200,30 @@ function parseEstimationResponse(output: string): EstimationResult {
   if (fencedMatch) {
     jsonStr = fencedMatch[1];
   } else {
-    // Try to find raw JSON object
-    const jsonMatch = output.match(/\{[\s\S]*"storyPoints"[\s\S]*\}/);
-    if (jsonMatch) {
-      jsonStr = jsonMatch[0];
+    // Try to extract a raw JSON object containing "storyPoints".
+    // We find the last "storyPoints" in the output, then try { positions
+    // before it (nearest first) paired with the last } after it, letting
+    // JSON.parse decide validity. This avoids greedy-regex issues when
+    // the surrounding text contains stray braces (e.g. URL templates).
+    const spIdx = output.lastIndexOf('"storyPoints"');
+    if (spIdx !== -1) {
+      const endIdx = output.lastIndexOf("}");
+      if (endIdx > spIdx) {
+        for (
+          let i = output.lastIndexOf("{", spIdx);
+          i >= 0;
+          i = output.lastIndexOf("{", i - 1)
+        ) {
+          const candidate = output.substring(i, endIdx + 1);
+          try {
+            JSON.parse(candidate);
+            jsonStr = candidate;
+            break;
+          } catch {
+            continue;
+          }
+        }
+      }
     }
   }
 

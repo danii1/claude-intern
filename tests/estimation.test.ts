@@ -86,9 +86,25 @@ function parseEstimationResponse(output: string) {
   if (fencedMatch) {
     jsonStr = fencedMatch[1];
   } else {
-    const jsonMatch = output.match(/\{[\s\S]*"storyPoints"[\s\S]*\}/);
-    if (jsonMatch) {
-      jsonStr = jsonMatch[0];
+    const spIdx = output.lastIndexOf('"storyPoints"');
+    if (spIdx !== -1) {
+      const endIdx = output.lastIndexOf("}");
+      if (endIdx > spIdx) {
+        for (
+          let i = output.lastIndexOf("{", spIdx);
+          i >= 0;
+          i = output.lastIndexOf("{", i - 1)
+        ) {
+          const candidate = output.substring(i, endIdx + 1);
+          try {
+            JSON.parse(candidate);
+            jsonStr = candidate;
+            break;
+          } catch {
+            continue;
+          }
+        }
+      }
     }
   }
 
@@ -258,6 +274,20 @@ That's my assessment.`;
   test("should round implementationConfidence to integer", () => {
     const output = `{"storyPoints": 5, "confidence": "high", "implementationConfidence": 7.6, "reasoning": "ok", "risks": [], "unclearAreas": [], "summary": "ok"}`;
     expect(parseEstimationResponse(output).implementationConfidence).toBe(8);
+  });
+
+  test("should handle text with stray braces before JSON (URL templates)", () => {
+    const output = `Based on my analysis:
+
+- **Admin** sends ordered IDs to \`PATCH /api/client_library/{id}/set_featured_playlists/\` (and similar endpoints).
+- **Catalog homepage** fetches featured items with \`is_featured=1\` filter.
+
+{"storyPoints":3,"confidence":"medium","implementationConfidence":4,"reasoning":"The bug is well-localized","risks":["Backend may not expose a field"],"unclearAreas":["What is the exact backend field name?"],"summary":"Frontend sort parameter uses boolean is_featured instead of positional featured order."}`;
+
+    const result = parseEstimationResponse(output);
+    expect(result.storyPoints).toBe(3);
+    expect(result.confidence).toBe("medium");
+    expect(result.implementationConfidence).toBe(4);
   });
 
   test("should prefer code-fenced JSON over bare JSON", () => {
