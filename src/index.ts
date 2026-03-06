@@ -40,6 +40,7 @@ interface ProgramOptions {
   jql?: string; // JQL query for batch processing
   skipJiraComments: boolean; // New option to skip posting comments to JIRA
   hookRetries: string; // Number of retries for git hook failures
+  estimate: boolean; // Run in estimation mode to add story points
 }
 
 interface ClarityAssessment {
@@ -51,6 +52,16 @@ interface ClarityAssessment {
     severity: "critical" | "major" | "minor";
   }>;
   recommendations: string[];
+  summary: string;
+}
+
+interface EstimationResult {
+  storyPoints: number; // 1, 2, 3, 5, 8, 13, 21
+  confidence: "high" | "medium" | "low";
+  implementationConfidence: number; // 0-10 likelihood AI can implement
+  reasoning: string;
+  risks: string[];
+  unclearAreas: string[];
   summary: string;
 }
 
@@ -287,6 +298,11 @@ function getInProgressStatusForProject(projectKey: string, settings: ProjectSett
 // Get To Do status for a specific project key
 function getTodoStatusForProject(projectKey: string, settings: ProjectSettings | null): string | undefined {
   return settings?.projects?.[projectKey]?.todoStatus;
+}
+
+// Get story points field override for a specific project key
+function getStoryPointsFieldForProject(projectKey: string, settings: ProjectSettings | null): string | undefined {
+  return settings?.projects?.[projectKey]?.storyPointsField;
 }
 
 // Load environment variables from multiple possible locations
@@ -558,6 +574,10 @@ program
     "--hook-retries <number>",
     "Number of retry attempts for git hook failures",
     "10"
+  )
+  .option(
+    "--estimate",
+    "Run in estimation mode to add story points estimates to JIRA tasks"
   );
 
 // Only parse with Commander if we're not running a subcommand
@@ -1147,6 +1167,160 @@ async function main(): Promise<void> {
         "     claude-intern --jql \"project = PROJ AND status = 'To Do'\""
       );
       process.exit(1);
+    }
+
+    // Estimation mode: separate code path
+    if (options.estimate) {
+      console.log("\n📊 Running in estimation mode...");
+
+      const jiraClient = new JiraClient(
+        process.env.JIRA_BASE_URL!,
+        process.env.JIRA_EMAIL!,
+        process.env.JIRA_API_TOKEN!
+      );
+
+      const projectSettings = loadProjectSettings();
+      const estimationResults = {
+        total: 0,
+        estimated: 0,
+        skipped: 0,
+        failed: 0,
+        errors: [] as Array<{ taskKey: string; error: string }>,
+      };
+
+      for (const taskKey of tasksToProcess) {
+        try {
+          console.log(`\n${"=".repeat(60)}`);
+          console.log(`📊 Estimating: ${taskKey}`);
+
+          // Fetch issue to check creation date
+          const issue = await jiraClient.getIssue(taskKey);
+
+          // Skip tasks created less than 24 hours ago
+          const createdDate = new Date(issue.fields.created);
+          const now = new Date();
+          const hoursAgo =
+            (now.getTime() - createdDate.getTime()) / (1000 * 60 * 60);
+
+          if (hoursAgo < 24) {
+            console.log(
+              `⏭️  Skipping ${taskKey} — created ${hoursAgo.toFixed(1)}h ago (< 24h)`
+            );
+            estimationResults.skipped++;
+            continue;
+          }
+
+          // Check if task already has an estimation comment
+          const existingEstimation = await jiraClient.findEstimationComment(taskKey);
+          let existingCommentId: string | undefined;
+
+          if (existingEstimation) {
+            // Compare estimation comment date with issue updated date
+            const estimationDate = new Date(existingEstimation.created);
+            const issueUpdated = new Date(issue.fields.updated);
+
+            if (issueUpdated <= estimationDate) {
+              console.log(
+                `⏭️  Skipping ${taskKey} — already estimated and not updated since`
+              );
+              estimationResults.skipped++;
+              continue;
+            }
+
+            console.log(
+              `🔄 Re-estimating ${taskKey} — task updated since last estimate`
+            );
+            existingCommentId = existingEstimation.commentId;
+          }
+
+          estimationResults.total++;
+
+          // Fetch comments and linked resources
+          const comments = await jiraClient.getIssueComments(taskKey);
+          const linkedResources = jiraClient.extractLinkedResources(issue);
+          const relatedIssues = await jiraClient.getRelatedWorkItems(issue);
+
+          // Format task details
+          const taskDetails = jiraClient.formatIssueDetails(
+            issue,
+            comments,
+            linkedResources,
+            relatedIssues
+          );
+
+          // Create estimation prompt file
+          const { tmpdir } = require("os");
+          const estimationFile = join(
+            tmpdir(),
+            `estimation-${taskKey.toLowerCase()}-${Date.now()}.md`
+          );
+          ClaudeFormatter.saveEstimationPrompt(
+            taskDetails,
+            estimationFile,
+            process.env.JIRA_BASE_URL!
+          );
+
+          // Run estimation
+          const result = await runEstimation(
+            estimationFile,
+            resolvedClaudePath,
+            taskKey,
+            jiraClient,
+            projectSettings,
+            options.skipJiraComments,
+            existingCommentId
+          );
+
+          // Clean up temp file
+          try {
+            require("fs").unlinkSync(estimationFile);
+          } catch {
+            // Ignore cleanup errors
+          }
+
+          if (result) {
+            estimationResults.estimated++;
+          } else {
+            estimationResults.failed++;
+            estimationResults.errors.push({
+              taskKey,
+              error: "Failed to parse estimation response",
+            });
+          }
+        } catch (error) {
+          estimationResults.failed++;
+          estimationResults.errors.push({
+            taskKey,
+            error: (error as Error).message,
+          });
+          console.error(
+            `❌ Failed to estimate ${taskKey}: ${(error as Error).message}`
+          );
+        }
+      }
+
+      // Print summary
+      console.log(`\n${"=".repeat(60)}`);
+      console.log("📊 Estimation Summary:");
+      console.log(`   Estimated: ${estimationResults.estimated}`);
+      console.log(`   Skipped (< 24h old): ${estimationResults.skipped}`);
+      console.log(`   Failed: ${estimationResults.failed}`);
+
+      if (estimationResults.errors.length > 0) {
+        console.log("\n❌ Failed estimations:");
+        estimationResults.errors.forEach(({ taskKey, error }) => {
+          console.log(`   - ${taskKey}: ${error}`);
+        });
+      }
+
+      // Release lock and exit
+      if (lockManager) {
+        lockManager.release();
+      }
+      if (estimationResults.failed > 0) {
+        process.exit(1);
+      }
+      return;
     }
 
     // Process tasks sequentially
@@ -1817,6 +1991,279 @@ async function postClarityComment(
   } catch (error) {
     console.warn("Failed to post clarity comment to JIRA:", error);
   }
+}
+
+// Function to run Claude for story points estimation
+async function runEstimation(
+  estimationFile: string,
+  claudePath: string,
+  taskKey: string,
+  jiraClient: JiraClient,
+  settings: ProjectSettings | null,
+  skipJiraComments = false,
+  existingCommentId?: string
+): Promise<EstimationResult | null> {
+  return new Promise((resolve, reject) => {
+    if (!existsSync(estimationFile)) {
+      reject(new Error(`Estimation file not found: ${estimationFile}`));
+      return;
+    }
+
+    const estimationContent = readFileSync(estimationFile, "utf8");
+    const timeoutMinutes = parseInt(process.env.CLAUDE_TIMEOUT_MINUTES || "60", 10);
+
+    console.log("📊 Running story points estimation with Claude...");
+    console.log(
+      `   Command: ${claudePath} -p --dangerously-skip-permissions --max-turns 10`
+    );
+
+    let stdoutOutput = "";
+    let stderrOutput = "";
+    let timedOut = false;
+
+    const claude: ChildProcess = spawn(
+      claudePath,
+      ["-p", "--dangerously-skip-permissions", "--max-turns", "10"],
+      {
+        stdio: ["pipe", "pipe", "pipe"],
+      }
+    );
+
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      console.error(
+        `\n⏰ Claude estimation timed out after ${timeoutMinutes} minutes, killing...`
+      );
+      claude.kill("SIGTERM");
+      setTimeout(() => {
+        if (!claude.killed) {
+          claude.kill("SIGKILL");
+        }
+      }, 10_000);
+    }, timeoutMinutes * 60 * 1000);
+
+    if (claude.stdout) {
+      claude.stdout.on("data", (data: Buffer) => {
+        stdoutOutput += data.toString();
+      });
+    }
+
+    if (claude.stderr) {
+      claude.stderr.on("data", (data: Buffer) => {
+        stderrOutput += data.toString();
+      });
+    }
+
+    claude.on("error", (error: NodeJS.ErrnoException) => {
+      clearTimeout(timeout);
+      if (error.code === "ENOENT") {
+        reject(
+          new Error(
+            `Claude CLI not found at: ${claudePath}\nPlease install Claude CLI or specify the correct path with --claude-path`
+          )
+        );
+      } else {
+        reject(new Error(`Failed to run Claude estimation: ${error.message}`));
+      }
+    });
+
+    claude.on("close", async (code: number | null) => {
+      clearTimeout(timeout);
+
+      if (timedOut) {
+        reject(
+          new Error(
+            `Claude estimation timed out after ${timeoutMinutes} minutes`
+          )
+        );
+        return;
+      }
+
+      if (code !== 0) {
+        reject(new Error(`Claude estimation exited with code ${code}`));
+        return;
+      }
+
+      try {
+        // Parse JSON from Claude's response
+        const result = parseEstimationResponse(stdoutOutput);
+
+        console.log(`\n📊 Estimation Result for ${taskKey}:`);
+        console.log(`   Story Points: ${result.storyPoints}`);
+        console.log(`   Confidence: ${result.confidence}`);
+        const implLabel =
+          result.implementationConfidence >= 9 ? "Almost certain"
+          : result.implementationConfidence >= 7 ? "High chance"
+          : result.implementationConfidence >= 5 ? "May need guidance"
+          : result.implementationConfidence >= 3 ? "Significant ambiguity"
+          : "Needs human judgment";
+        console.log(`   AI Can Implement: ${result.implementationConfidence}/10 — ${implLabel}`);
+        console.log(`   Summary: ${result.summary}`);
+
+        if (result.risks.length > 0) {
+          console.log(`   Risks: ${result.risks.join("; ")}`);
+        }
+        if (result.unclearAreas.length > 0) {
+          console.log(`   Unclear Areas: ${result.unclearAreas.join("; ")}`);
+        }
+
+        // Discover or use configured story points field
+        const projectKey = taskKey.split("-")[0];
+        const configuredField = getStoryPointsFieldForProject(
+          projectKey,
+          settings
+        );
+        if (configuredField) {
+          console.log(`📊 Using configured story points field: ${configuredField}`);
+        }
+        const fieldId = configuredField || (await jiraClient.discoverStoryPointsField(taskKey));
+
+        // Update story points in JIRA
+        if (fieldId) {
+          try {
+            await jiraClient.updateStoryPoints(
+              taskKey,
+              fieldId,
+              result.storyPoints
+            );
+          } catch (updateError) {
+            console.warn(
+              `⚠️  Failed to set story points field: ${updateError}`
+            );
+          }
+        } else {
+          console.log(
+            "⚠️  No story points field found — skipping field update"
+          );
+          console.log(
+            '   Configure storyPointsField in .claude-intern/settings.json or ensure your JIRA has a "Story Points" field'
+          );
+        }
+
+        // Post or update estimation comment on JIRA
+        if (!skipJiraComments) {
+          try {
+            if (existingCommentId) {
+              await jiraClient.updateEstimationComment(
+                taskKey,
+                existingCommentId,
+                result
+              );
+            } else {
+              await jiraClient.postEstimationComment(taskKey, result);
+            }
+          } catch (commentError) {
+            console.warn(
+              `⚠️  Failed to ${existingCommentId ? "update" : "post"} estimation comment: ${commentError}`
+            );
+          }
+        } else {
+          console.log(
+            "⏭️  Skipping estimation JIRA comment (--skip-jira-comments)"
+          );
+        }
+
+        // Save estimation result to task directory
+        try {
+          const baseOutputDir =
+            process.env.CLAUDE_INTERN_OUTPUT_DIR || "/tmp/claude-intern-tasks";
+          const taskDir = join(baseOutputDir, taskKey.toLowerCase());
+          mkdirSync(taskDir, { recursive: true });
+          const resultFile = join(taskDir, "estimation-result.json");
+          writeFileSync(resultFile, JSON.stringify(result, null, 2), "utf8");
+          console.log(`💾 Saved estimation result to: ${resultFile}`);
+        } catch (saveError) {
+          console.warn(`⚠️  Failed to save estimation result: ${saveError}`);
+        }
+
+        resolve(result);
+      } catch (parseError) {
+        console.warn("Failed to parse estimation response:", parseError);
+        console.log("Raw Claude output:", stdoutOutput);
+        resolve(null);
+      }
+    });
+
+    if (claude.stdin) {
+      claude.stdin.write(estimationContent);
+      claude.stdin.end();
+    }
+  });
+}
+
+// Parse Claude's estimation response into an EstimationResult
+function parseEstimationResponse(output: string): EstimationResult {
+  // Try to find JSON in the response — with or without code fences
+  let jsonStr: string | null = null;
+
+  const fencedMatch = output.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  if (fencedMatch) {
+    jsonStr = fencedMatch[1];
+  } else {
+    // Try to extract a raw JSON object containing "storyPoints".
+    // We find the last "storyPoints" in the output, then try { positions
+    // before it (nearest first) paired with the last } after it, letting
+    // JSON.parse decide validity. This avoids greedy-regex issues when
+    // the surrounding text contains stray braces (e.g. URL templates).
+    const spIdx = output.lastIndexOf('"storyPoints"');
+    if (spIdx !== -1) {
+      const endIdx = output.lastIndexOf("}");
+      if (endIdx > spIdx) {
+        for (
+          let i = output.lastIndexOf("{", spIdx);
+          i >= 0;
+          i = output.lastIndexOf("{", i - 1)
+        ) {
+          const candidate = output.substring(i, endIdx + 1);
+          try {
+            JSON.parse(candidate);
+            jsonStr = candidate;
+            break;
+          } catch {
+            continue;
+          }
+        }
+      }
+    }
+  }
+
+  if (!jsonStr) {
+    throw new Error("No JSON found in estimation response");
+  }
+
+  const parsed = JSON.parse(jsonStr);
+
+  // Validate required fields
+  const validPoints = [1, 2, 3, 5, 8, 13, 21];
+  if (!validPoints.includes(parsed.storyPoints)) {
+    throw new Error(
+      `Invalid story points value: ${parsed.storyPoints}. Must be one of: ${validPoints.join(", ")}`
+    );
+  }
+
+  if (!["high", "medium", "low"].includes(parsed.confidence)) {
+    throw new Error(
+      `Invalid confidence level: ${parsed.confidence}. Must be high, medium, or low`
+    );
+  }
+
+  // Clamp implementationConfidence to 0-10, default to 5 if missing
+  let implConf = typeof parsed.implementationConfidence === "number"
+    ? parsed.implementationConfidence
+    : 5;
+  implConf = Math.max(0, Math.min(10, Math.round(implConf)));
+
+  return {
+    storyPoints: parsed.storyPoints,
+    confidence: parsed.confidence,
+    implementationConfidence: implConf,
+    reasoning: parsed.reasoning || "",
+    risks: Array.isArray(parsed.risks) ? parsed.risks : [],
+    unclearAreas: Array.isArray(parsed.unclearAreas)
+      ? parsed.unclearAreas
+      : [],
+    summary: parsed.summary || "",
+  };
 }
 
 // Function to log git hook errors to file

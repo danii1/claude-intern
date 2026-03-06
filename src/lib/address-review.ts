@@ -505,6 +505,32 @@ export async function addressReview(
     const hookRetries = parseInt(process.env.HOOK_RETRIES || "10", 10);
     const claudePath = process.env.CLAUDE_CLI_PATH || "claude";
     const maxTurns = parseInt(process.env.CLAUDE_MAX_TURNS || "500", 10);
+    const prBranch = pr.head.ref;
+
+    // Verify Claude didn't switch branches during execution (e.g., checking out main for comparison)
+    const currentBranch = await Utils.getCurrentBranch(workDir);
+    if (currentBranch && currentBranch !== prBranch) {
+      console.warn(`⚠️  Claude switched from '${prBranch}' to '${currentBranch}' during execution, switching back...`);
+      const switchBack = await Utils.executeGitCommand(
+        ["checkout", prBranch],
+        { verbose, cwd: workDir }
+      );
+      if (!switchBack.success) {
+        console.warn(`   Simple checkout failed, trying stash + checkout...`);
+        await Utils.executeGitCommand(["stash", "--include-untracked"], { verbose: false, cwd: workDir });
+        const switchAfterStash = await Utils.executeGitCommand(
+          ["checkout", prBranch],
+          { verbose, cwd: workDir }
+        );
+        if (switchAfterStash.success) {
+          await Utils.executeGitCommand(["stash", "pop"], { verbose: false, cwd: workDir });
+        } else {
+          console.error(`❌ Failed to switch back to branch '${prBranch}': ${switchAfterStash.error}`);
+          throw new Error(`Failed to switch back to branch '${prBranch}'`);
+        }
+      }
+      console.log(`✅ Switched back to '${prBranch}'`);
+    }
 
     // Prefer Claude's commits, but handle uncommitted changes as fallback
     if (hasUnpushed) {
