@@ -3,6 +3,12 @@
 > [!IMPORTANT]
 > **This repository is archived.** Claude Intern has evolved into **DevIntern** — all development has moved to [github.com/getdevintern/devintern](https://github.com/getdevintern/devintern).
 >
+> DevIntern goes far beyond JIRA + Claude:
+>
+> - **Trackers:** Jira, Linear, Trello, Asana, Azure DevOps, GitHub Issues, or plain markdown files
+> - **Coding agents:** Claude Code, Codex, Cursor, or OpenCode — swapping is one config line
+> - **Your model, your keys:** whatever your agent supports, billed on your existing provider contract
+>
 > 👉 Visit **[devintern.com](https://devintern.com)** to learn more and get started with the latest version.
 
 Your AI intern for automatically implementing JIRA tasks using Claude. Supports both single task processing and batch processing of multiple tasks through JQL queries or explicit task lists. Pulls task details and feeds them to Claude for implementation with full automation of the development workflow.
